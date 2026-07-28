@@ -2,7 +2,7 @@ current_release: foundation-1
 priorities:
   - id: CORE-001
     title: Monorepo and local development foundation
-    status: in_progress
+    status: done
     priority: 1
     dependencies: []
     acceptance_criteria:
@@ -11,16 +11,25 @@ priorities:
       - Local PostgreSQL starts through documented tooling
       - Environment variables are validated
     implementation_notes: >-
-      Node.js TypeScript monorepo with a backend-only Fastify Core API. No GUI applications
-      are included; future Vercel-hosted applications must consume Core's authenticated APIs.
+      Node.js TypeScript monorepo with a backend-only Fastify Core API and native PostgreSQL 17
+      local-development setup. No GUI applications are included; future Vercel-hosted applications
+      must consume Core's authenticated APIs.
   - id: CORE-002
     title: Database schema foundation and migrations
-    status: blocked
+    status: done
     priority: 2
     dependencies: [CORE-001]
+    acceptance_criteria:
+      - Foundation tables use immutable UUID identifiers and UTC timestamps
+      - Migrations are deterministic, tracked, and fail safely on checksum drift
+      - A real local PostgreSQL database can apply and validate the foundation migration
+    implementation_notes: >-
+      The PostgreSQL foundation migration defines the required identity, organization,
+      authorization, entitlement, and audit tables. SQL migration checksums are recorded in
+      schema_migrations and verified before every run.
   - id: CORE-003
     title: Structured logging, health checks, and audit framework
-    status: blocked
+    status: ready
     priority: 3
     dependencies: [CORE-002]
   - id: CORE-004

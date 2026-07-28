@@ -3,6 +3,8 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
+    "db:up": "node scripts/up.mjs",
+    "db:down": "node scripts/down.mjs",
     "db:migrate": "node scripts/migrate.mjs",
     "db:seed": "node scripts/seed.mjs",
     "db:reset": "node scripts/reset.mjs",

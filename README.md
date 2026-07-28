@@ -18,6 +18,7 @@ for developers whose machines support Docker Desktop.
 npm install
 copy .env.example .env
 npm run db:up
+npm run db:migrate
 npm run dev
 ```
 
@@ -25,6 +26,15 @@ The API listens on `http://127.0.0.1:3000` by default. Verify it with `GET /heal
 starts or verifies the native `postgresql-x64-17` Windows service and checks the `obsidian_core`
 database. The local database uses the development-only credentials in `.env.example`; never use them
 outside a local environment. `npm run db:docker:up` is available as an optional Docker-based setup.
+`npm run db:migrate` reports how many migrations it newly applied and how many existing migrations it
+verified against their recorded checksums.
+
+### Database foundation
+
+`CORE-002` establishes the initial PostgreSQL tables for identity, sessions, organizational hierarchy,
+applications, roles, permissions, entitlements, and audit events. Each table uses a UUID primary key and
+UTC timestamps. Migration files are append-only: their SHA-256 checksums are recorded in
+`schema_migrations`, and a changed historical migration is rejected before it can be applied.
 
 Run the foundation quality gates with:
 
