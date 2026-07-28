@@ -12,6 +12,8 @@ The repository currently contains the foundation for a backend-only Node.js serv
 
 Auth0 is the selected identity provider. Applications will use OIDC Authorization Code with PKCE; Core will verify tokens server-side and remain authoritative for profiles, entitlements, roles, permissions, and resource-level authorization.
 
+Before enabling login, create separate Auth0 tenants for development, staging, and production; configure each API audience and allowed callback/logout URLs; then set `AUTH0_DOMAIN` and `AUTH0_AUDIENCE` through secret management. Never commit client secrets or management API credentials.
+
 ### Local development
 
 Prerequisites: Node.js 24 LTS, npm, PostgreSQL 17, and Git. The documented Windows development setup
