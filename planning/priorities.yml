@@ -1,0 +1,110 @@
+current_release: foundation-1
+priorities:
+  - id: CORE-001
+    title: Monorepo and local development foundation
+    status: in_progress
+    priority: 1
+    dependencies: []
+    acceptance_criteria:
+      - Monorepo installs with one command
+      - All applications pass lint and typecheck
+      - Local PostgreSQL starts through documented tooling
+      - Environment variables are validated
+    implementation_notes: >-
+      Node.js TypeScript monorepo with a backend-only Fastify Core API. No GUI applications
+      are included; future Vercel-hosted applications must consume Core's authenticated APIs.
+  - id: CORE-002
+    title: Database schema foundation and migrations
+    status: blocked
+    priority: 2
+    dependencies: [CORE-001]
+  - id: CORE-003
+    title: Structured logging, health checks, and audit framework
+    status: blocked
+    priority: 3
+    dependencies: [CORE-002]
+  - id: CORE-004
+    title: Central identity integration
+    status: blocked
+    priority: 4
+    dependencies: [CORE-003]
+  - id: CORE-005
+    title: Roles, permissions, and application entitlements
+    status: blocked
+    priority: 5
+    dependencies: [CORE-004]
+  - id: CORE-006
+    title: Company, district, store, and department hierarchy
+    status: blocked
+    priority: 6
+    dependencies: [CORE-005]
+  - id: CORE-007
+    title: Customer profiles and shared addresses
+    status: blocked
+    priority: 7
+    dependencies: [CORE-006]
+  - id: CORE-008
+    title: Employee profiles and store assignments
+    status: blocked
+    priority: 8
+    dependencies: [CORE-006]
+  - id: CORE-009
+    title: Timekeeping and immutable corrections
+    status: blocked
+    priority: 9
+    dependencies: [CORE-008]
+  - id: CORE-010
+    title: Product/service catalog and versioned quote engine
+    status: blocked
+    priority: 10
+    dependencies: [CORE-006]
+  - id: CORE-011
+    title: Jobs, appointments, and workflow state machine
+    status: blocked
+    priority: 11
+    dependencies: [CORE-007, CORE-008, CORE-010]
+  - id: CORE-012
+    title: Payment-provider capability spike and adapter contract
+    status: blocked
+    priority: 12
+    dependencies: [CORE-005]
+  - id: CORE-013
+    title: Subscription model and $15/month protection-plan configuration
+    status: blocked
+    priority: 13
+    dependencies: [CORE-007, CORE-010, CORE-012]
+  - id: CORE-014
+    title: Commission engine with $20/hour plan and 10% default commission
+    status: blocked
+    priority: 14
+    dependencies: [CORE-008, CORE-009, CORE-010, CORE-012]
+  - id: CORE-015
+    title: Store/district/company sales and wage aggregates
+    status: blocked
+    priority: 15
+    dependencies: [CORE-006, CORE-009, CORE-014]
+  - id: CORE-016
+    title: Executive Panel authentication and overview
+    status: blocked
+    priority: 16
+    dependencies: [CORE-005, CORE-015]
+  - id: CORE-017
+    title: Employee mobile clock and assigned-job MVP
+    status: blocked
+    priority: 17
+    dependencies: [CORE-009, CORE-011]
+  - id: CORE-018
+    title: Customer portal MVP
+    status: blocked
+    priority: 18
+    dependencies: [CORE-007, CORE-011, CORE-013]
+  - id: CORE-019
+    title: Public website account and protection enrollment
+    status: blocked
+    priority: 19
+    dependencies: [CORE-013]
+  - id: CORE-020
+    title: Payroll export integration
+    status: blocked
+    priority: 20
+    dependencies: [CORE-009, CORE-014]

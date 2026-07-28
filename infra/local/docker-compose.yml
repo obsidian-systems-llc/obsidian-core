@@ -1,0 +1,18 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: obsidian_core
+      POSTGRES_USER: obsidian_core
+      POSTGRES_PASSWORD: local_development_only
+    ports:
+      - '5432:5432'
+    volumes:
+      - obsidian-core-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U obsidian_core -d obsidian_core']
+      interval: 5s
+      timeout: 5s
+      retries: 12
+volumes:
+  obsidian-core-postgres:
