@@ -36,6 +36,12 @@ applications, roles, permissions, entitlements, and audit events. Each table use
 UTC timestamps. Migration files are append-only: their SHA-256 checksums are recorded in
 `schema_migrations`, and a changed historical migration is rejected before it can be applied.
 
+### Observability
+
+Core API requests receive or propagate `x-correlation-id` and include it in structured logs. `GET /health`
+reports API liveness, while `GET /ready` verifies PostgreSQL readiness without exposing configuration. Audit
+helpers reject card data, authentication secrets, and tokens from metadata before persistence.
+
 Run the foundation quality gates with:
 
 ```text

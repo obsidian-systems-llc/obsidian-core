@@ -29,12 +29,19 @@ priorities:
       schema_migrations and verified before every run.
   - id: CORE-003
     title: Structured logging, health checks, and audit framework
-    status: ready
+    status: done
     priority: 3
     dependencies: [CORE-002]
+    acceptance_criteria:
+      - Every request has a propagated or generated correlation ID
+      - Health reports API and database readiness without leaking configuration
+      - Audit-event helpers capture actor, action, target, correlation ID, timestamp, and approved metadata
+    implementation_notes: >-
+      Core API provides correlation-aware structured logging, liveness and database-readiness endpoints,
+      and validated audit-event construction that rejects sensitive metadata.
   - id: CORE-004
     title: Central identity integration
-    status: blocked
+    status: ready
     priority: 4
     dependencies: [CORE-003]
   - id: CORE-005
