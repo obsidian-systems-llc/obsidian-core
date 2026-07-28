@@ -8,6 +8,10 @@ Customer-facing, employee-facing, administrative, and executive applications mus
 
 The repository currently contains the foundation for a backend-only Node.js service. `apps/core-api` uses Fastify and strict TypeScript, and exposes only `GET /health` while database, identity, authorization, audit, and business domains are built in priority order. No graphical user interface is included in this repository. Future Vercel-hosted customer, employee, administrative, and executive applications must communicate with Core through authenticated APIs and must not become independent systems of record.
 
+### Identity provider
+
+Auth0 is the selected identity provider. Applications will use OIDC Authorization Code with PKCE; Core will verify tokens server-side and remain authoritative for profiles, entitlements, roles, permissions, and resource-level authorization.
+
 ### Local development
 
 Prerequisites: Node.js 24 LTS, npm, PostgreSQL 17, and Git. The documented Windows development setup

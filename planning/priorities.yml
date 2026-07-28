@@ -41,9 +41,12 @@ priorities:
       and validated audit-event construction that rejects sensitive metadata.
   - id: CORE-004
     title: Central identity integration
-    status: ready
+    status: in_progress
     priority: 4
     dependencies: [CORE-003]
+    implementation_notes: >-
+      Auth0 is the selected OIDC identity provider. Core remains authoritative for profiles,
+      application entitlements, roles, permissions, and resource-level authorization.
   - id: CORE-005
     title: Roles, permissions, and application entitlements
     status: blocked
