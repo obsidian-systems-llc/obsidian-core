@@ -10,7 +10,9 @@ The repository currently contains the foundation for a backend-only Node.js serv
 
 ### Local development
 
-Prerequisites: Node.js 24 LTS, npm, Docker Desktop with Docker Compose, and Git.
+Prerequisites: Node.js 24 LTS, npm, PostgreSQL 17, and Git. The documented Windows development setup
+uses native PostgreSQL and does not require virtualization. Docker Compose remains an optional alternative
+for developers whose machines support Docker Desktop.
 
 ```text
 npm install
@@ -19,7 +21,10 @@ npm run db:up
 npm run dev
 ```
 
-The API listens on `http://127.0.0.1:3000` by default. Verify it with `GET /health`. The local PostgreSQL container is development-only and uses the credentials in `.env.example`; never use those credentials outside a local environment.
+The API listens on `http://127.0.0.1:3000` by default. Verify it with `GET /health`. `npm run db:up`
+starts or verifies the native `postgresql-x64-17` Windows service and checks the `obsidian_core`
+database. The local database uses the development-only credentials in `.env.example`; never use them
+outside a local environment. `npm run db:docker:up` is available as an optional Docker-based setup.
 
 Run the foundation quality gates with:
 
@@ -32,6 +37,12 @@ npm run test:integration
 npm run db:validate
 npm run build
 ```
+
+### Iteration delivery
+
+Every completed implementation iteration updates this README, runs its applicable validation checks,
+and is committed and pushed to the configured GitHub remote. Unfinished or blocked work remains
+uncommitted until it can be validated.
 
 ## Planned applications
 

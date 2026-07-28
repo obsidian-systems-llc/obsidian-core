@@ -250,6 +250,19 @@ Update documentation when changing:
 
 Add an ADR for decisions that materially affect architecture, security, data ownership, deployment, or vendor dependence.
 
+## Iteration delivery process
+
+When an implementation iteration is complete:
+
+1. Update `README.md` with the implemented behavior, setup, operational, or validation changes.
+2. Run the applicable required validation checks.
+3. Review Git status and stage only the completed iteration; do not include unrelated or unfinished work.
+4. Commit with a conventional commit message containing the applicable priority ID.
+5. Push the commit to the configured GitHub remote.
+
+Do not commit or push unfinished work merely to satisfy this process. If a check is blocked, document the
+blocker and keep the relevant priority in progress.
+
 ## Completion report format
 
 At the end of implementation, report:
