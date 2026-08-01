@@ -136,9 +136,13 @@ priorities:
       - Job creation and transition routes require separate Core Admin permissions with allowed and denied coverage
   - id: CORE-012
     title: Payment-provider capability spike and adapter contract
-    status: ready
+    status: done
     priority: 12
     dependencies: [CORE-005]
+    acceptance_criteria:
+      - Square sandbox, Payments, Catalog/Invoices/Subscriptions, idempotency, and signed-webhook requirements are verified from official documentation
+      - Core defines a provider-neutral payment contract that accepts only provider tokens/references and integer minor-unit amounts
+      - Production Square mode is rejected outside production, and no payment processing or webhook state mutation is enabled by this spike
     implementation_notes: >-
       Square is the interim provider. Verify Square sandbox, subscriptions, hosted or tokenized
       collection, webhooks, settlement reporting, refunds, terminals, and idempotency before any
@@ -146,7 +150,7 @@ priorities:
       finalization. Commerce360 remains deferred pending capability confirmation.
   - id: CORE-013
     title: Subscription model and $15/month protection-plan configuration
-    status: blocked
+    status: ready
     priority: 13
     dependencies: [CORE-007, CORE-010, CORE-012]
   - id: CORE-014

@@ -126,7 +126,19 @@ adapter: access token, application ID, location ID, webhook signature key, notif
 version. `SQUARE_ENVIRONMENT` selects the active mode. Development and test deployments must select
 `sandbox`; the future adapter will reject production mode unless `NODE_ENV=production`. Keep all values
 in environment-specific secret management. Never expose access tokens or webhook signature keys to any
-GUI, and do not add Square processing code until CORE-012.
+GUI. CORE-012 adds only configuration validation and a provider-neutral contract; processor calls
+and webhook mutation remain deferred.
+
+### Payment-provider adapter contract
+
+CORE-012 verifies Square's documented sandbox, payment, subscription, invoice, idempotency, and
+webhook-signature capabilities and defines a provider-neutral Core payment contract. It accepts
+only provider payment-method references and integer minor-unit amounts—never raw card data. The
+configuration loader selects sandbox or production credentials without exposing them to any GUI and
+rejects production Square mode unless `NODE_ENV=production`. This is a capability spike only: it
+does not make Square API calls, accept webhooks, or mutate payment state. Future webhook handling
+must validate Square's HMAC-SHA256 header against the subscription signature key, exact notification
+URL, and raw request body before any processing.
 
 ### Bootstrap Super Admin
 
