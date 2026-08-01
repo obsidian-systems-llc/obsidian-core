@@ -173,9 +173,16 @@ priorities:
     dependencies: [CORE-006, CORE-009, CORE-014]
   - id: CORE-016
     title: Executive Panel authentication and overview
-    status: blocked
+    status: done
     priority: 16
     dependencies: [CORE-005, CORE-015, CORE-026]
+    acceptance_criteria:
+      - Core exposes an Auth0-protected executive overview contract requiring executive-panel reporting.read authorization
+      - Overview metrics are hierarchy-scoped, use persisted aggregate rows, and compare the latest reporting date with the prior available date
+      - The contract keeps estimated workforce costs distinct from finalized payroll and is covered by API authorization and real-database tests
+    implementation_notes: >-
+      This is a Core API iteration only. The Vercel-hosted Executive Panel remains a separate client
+      that consumes the authenticated overview and aggregate endpoints.
   - id: CORE-017
     title: Employee mobile clock and assigned-job MVP
     status: blocked

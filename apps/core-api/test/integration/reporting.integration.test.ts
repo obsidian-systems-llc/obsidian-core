@@ -85,6 +85,13 @@ describe.skipIf(!databaseUrl)('PostgreSQL reporting scope', () => {
       'INSERT INTO daily_operating_aggregates (aggregation_date, scope_type, store_id, net_sales_minor, source_status) VALUES ($1,$2,$3,$4,$5)',
       ['2026-08-01', 'store', ids.store, 300, 'estimated'],
     );
+    await client.query(
+      `INSERT INTO daily_operating_aggregates
+       (aggregation_date, scope_type, store_id, net_sales_minor, collected_revenue_minor,
+        estimated_hourly_wages_minor, estimated_commissions_minor, source_status)
+       VALUES ('2026-08-02','store',$1,700,600,100,70,'estimated')`,
+      [ids.store],
+    );
   });
 
   afterAll(async () => {
@@ -113,5 +120,19 @@ describe.skipIf(!databaseUrl)('PostgreSQL reporting scope', () => {
         expect.objectContaining({ scopeType: 'store', netSalesMinor: '300' }),
       ]),
     );
+  });
+
+  it('summarizes the latest and preceding available reporting dates', async () => {
+    await expect(repository.overviewForSubject(subject)).resolves.toEqual({
+      current: {
+        aggregationDate: '2026-08-02',
+        collectedRevenueMinor: '600',
+        estimatedCommissionsMinor: '70',
+        estimatedHourlyWagesMinor: '100',
+        finalizedPayrollMinor: null,
+        netSalesMinor: '700',
+      },
+      previous: expect.objectContaining({ aggregationDate: '2026-08-01', netSalesMinor: '600' }),
+    });
   });
 });

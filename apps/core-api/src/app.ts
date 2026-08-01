@@ -418,6 +418,20 @@ export function buildApp({
       }
       if (reportingRepository)
         app.get(
+          '/v1/executive/overview',
+          {
+            preHandler: [
+              authenticate,
+              createAuthorizationGuard(authorizer, {
+                applicationKey: 'executive-panel',
+                permissionKey: 'reporting.read',
+              }),
+            ],
+          },
+          async (request) => reportingRepository.overviewForSubject(request.auth!.sub!),
+        );
+      if (reportingRepository)
+        app.get(
           '/v1/executive/operating-aggregates',
           {
             preHandler: [

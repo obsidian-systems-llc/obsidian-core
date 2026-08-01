@@ -907,6 +907,13 @@ Require stronger controls:
 
 Provide company-wide summary metrics and comparisons across periods.
 
+Core now exposes `GET /v1/executive/overview` for the Vercel-hosted Executive Panel. It requires a
+valid Auth0 access token plus the `executive-panel` entitlement and `reporting.read` permission.
+The response compares the latest persisted aggregate date with the preceding available date in the
+caller’s organization scope. It keeps net sales, collected revenue, estimated hourly wages,
+estimated commissions, and finalized payroll distinct; it does not generate or finalize accounting
+records.
+
 ### Step 9.3: Drilldowns
 
 Support:
