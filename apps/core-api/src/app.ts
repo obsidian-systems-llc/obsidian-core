@@ -268,7 +268,13 @@ export function buildApp({
                 error: { code: 'INVALID_QUOTE', message: 'Quote input is invalid.' },
               });
             try {
-              const quote = await quoteRepository.createForSubject(request.auth!.sub!, parsed.data);
+              const quote = await quoteRepository.createForSubject(
+                request.auth!.sub!,
+                parsed.data,
+                typeof request.headers['x-correlation-id'] === 'string'
+                  ? request.headers['x-correlation-id']
+                  : randomUUID(),
+              );
               return (
                 quote ??
                 reply.code(404).send({
@@ -306,7 +312,13 @@ export function buildApp({
               return reply
                 .code(400)
                 .send({ error: { code: 'INVALID_JOB', message: 'Job input is invalid.' } });
-            const job = await jobRepository.createForSubject(request.auth!.sub!, parsed.data);
+            const job = await jobRepository.createForSubject(
+              request.auth!.sub!,
+              parsed.data,
+              typeof request.headers['x-correlation-id'] === 'string'
+                ? request.headers['x-correlation-id']
+                : randomUUID(),
+            );
             return (
               job ??
               reply.code(404).send({
@@ -385,7 +397,22 @@ export function buildApp({
                   message: 'Subscription plan input is invalid.',
                 },
               });
-            return subscriptionPlanRepository.createVersion(parsed.data);
+            const version = await subscriptionPlanRepository.createVersion(
+              request.auth!.sub!,
+              parsed.data,
+              typeof request.headers['x-correlation-id'] === 'string'
+                ? request.headers['x-correlation-id']
+                : randomUUID(),
+            );
+            return (
+              version ??
+              reply.code(404).send({
+                error: {
+                  code: 'SUBSCRIPTION_PLAN_ACTOR_NOT_FOUND',
+                  message: 'Subscription plan actor was not found.',
+                },
+              })
+            );
           },
         );
       }

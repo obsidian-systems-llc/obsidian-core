@@ -175,7 +175,7 @@ priorities:
     title: Executive Panel authentication and overview
     status: blocked
     priority: 16
-    dependencies: [CORE-005, CORE-015]
+    dependencies: [CORE-005, CORE-015, CORE-026]
   - id: CORE-017
     title: Employee mobile clock and assigned-job MVP
     status: blocked
@@ -243,3 +243,38 @@ priorities:
       Introduce Core-owned route and route-stop records plus a provider abstraction for geocoding,
       travel time, route optimization, and navigation deep links. Front-end applications render maps
       and navigation while Core retains dispatch decisions, provider secrets, and operational route data.
+  - id: CORE-026
+    title: Operational correctness and security hardening
+    status: done
+    priority: 15.5
+    dependencies: [CORE-005, CORE-009, CORE-013, CORE-014, CORE-015]
+    acceptance_criteria:
+      - Reporting scope correctly resolves store and district aggregates through the organization hierarchy
+      - Subscription plan version writes are atomic, auditable, and safe under concurrent requests
+      - High-risk job, quote, compensation, and subscription writes emit safe audit events
+      - Compensation and aggregate claims in the README match executable Core behavior and are covered by real database and authorization tests
+    implementation_notes: >-
+      Corrective priority created from the implementation review. No new Executive Panel feature
+      work proceeds until these reliability and security gaps are resolved.
+  - id: CORE-027
+    title: Compensation assignment and commission lifecycle workflows
+    status: proposed
+    priority: 26
+    dependencies: [CORE-014, CORE-026]
+    acceptance_criteria:
+      - Authorized administrative workflows create effective-dated compensation assignments without rewriting history
+      - Commission generation, adjustment, and employee earnings reads are reproducible, authorized, and audited
+      - Payroll estimates remain explicitly distinct from finalized payroll records
+    implementation_notes: >-
+      Created by CORE-026 because CORE-014 currently provides schema and calculation primitives,
+      not employee-facing or administrative compensation and commission write workflows.
+  - id: CORE-028
+    title: API perimeter security controls
+    status: proposed
+    priority: 27
+    dependencies: [CORE-004, CORE-005, CORE-026]
+    acceptance_criteria:
+      - Sensitive endpoints have documented rate limits, CORS policy, and step-up authentication requirements
+      - Production security headers and allowed origins are configuration-validated and covered by API tests
+    implementation_notes: >-
+      Created by CORE-026 to turn the repository security baseline into executable API perimeter controls.

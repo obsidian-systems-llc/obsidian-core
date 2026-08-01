@@ -142,6 +142,11 @@ URL, and raw request body before any processing.
 
 ### Subscription plans
 
+**Current implementation boundary:** `POST /v1/executive/subscription-plan-versions` is
+executive-authorized, serialized per plan key, transactional, and audited. Customer subscription
+enrollment, invoicing, charging, renewal, and dunning are intentionally deferred to the payment and
+recurring-billing priorities.
+
 Subscription plans and their effective-dated versions use integer minor-unit prices, cadence, and
 optional provider references. Customer subscriptions preserve the selected plan version and safe
 provider subscription reference—never card credentials. The initial configurable Device Protection
@@ -151,6 +156,11 @@ cadence without rewriting existing agreements.
 
 ### Compensation and commissions
 
+**Current implementation boundary:** CORE-014 provides the effective-dated compensation and
+commission schema plus the integer-based calculation helper. It does not yet provide administrative
+assignment, commission generation or adjustment, employee earnings, or payroll-export workflows;
+those writes must be authorized and audited when CORE-027 implements them.
+
 Core uses effective-dated hourly or salary compensation plans and employee assignments. Commission
 entries snapshot eligible revenue, a configurable basis-point rate, attribution, and lifecycle
 status using integer minor units. The initial configuration is `$20.00/hour` and `10%`, but it is
@@ -158,6 +168,11 @@ versioned policy rather than a hard-coded payroll rule. Earnings remain estimate
 through payroll export.
 
 ### Operating aggregates
+
+**Current implementation boundary:** CORE-015 defines the aggregate schema and authorized reads,
+but no aggregate-refresh pipeline exists yet. The endpoint returns only rows already persisted by
+an authorized operational process and resolves store and district rows through the executive's
+effective organization hierarchy.
 
 Core persists daily store, district, and company aggregate records that keep gross sales, discounts,
 refunds, net/collected/outstanding revenue, estimated hourly wages, estimated commissions, and

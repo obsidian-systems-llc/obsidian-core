@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { Client } from 'pg';
 import { z } from 'zod';
+import { createAuditEvent } from './audit.js';
 
 const states = [
   'requested',
@@ -53,7 +54,11 @@ export const transitionJobSchema = z.object({
 });
 export type Job = { id: string; status: JobStatus; windowEnd: Date; windowStart: Date };
 export type JobRepository = {
-  createForSubject(s: string, i: z.infer<typeof createJobSchema>): Promise<Job | null>;
+  createForSubject(
+    s: string,
+    i: z.infer<typeof createJobSchema>,
+    correlationId: string,
+  ): Promise<Job | null>;
   transitionForSubject(
     s: string,
     id: string,
@@ -67,6 +72,7 @@ export class PostgresJobRepository implements JobRepository {
   async createForSubject(
     subject: string,
     input: z.infer<typeof createJobSchema>,
+    correlationId: string,
   ): Promise<Job | null> {
     const client = new Client({ connectionString: this.databaseUrl });
     try {
@@ -98,6 +104,32 @@ export class PostgresJobRepository implements JobRepository {
       await client.query(
         'INSERT INTO appointments (job_id, window_start, window_end) VALUES ($1,$2,$3)',
         [job.rows[0]!.id, input.windowStart, input.windowEnd],
+      );
+      const audit = createAuditEvent({
+        action: 'job.created',
+        actorUserId: userId,
+        afterValue: { status: 'requested' },
+        beforeValue: null,
+        correlationId,
+        reason: null,
+        targetId: job.rows[0]!.id,
+        targetType: 'job',
+      });
+      await client.query(
+        `INSERT INTO audit_events
+         (actor_user_id, action, target_type, target_id, correlation_id, reason, before_value, after_value, occurred_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+        [
+          audit.actorUserId,
+          audit.action,
+          audit.targetType,
+          audit.targetId,
+          audit.correlationId,
+          audit.reason,
+          audit.beforeValue,
+          audit.afterValue,
+          audit.occurredAt,
+        ],
       );
       await client.query('COMMIT');
       return await this.get(client, job.rows[0]!.id);
@@ -150,10 +182,36 @@ export class PostgresJobRepository implements JobRepository {
           z.uuid().safeParse(correlationId).success ? correlationId : randomUUID(),
         ],
       );
+      const audit = createAuditEvent({
+        action: 'job.transitioned',
+        actorUserId: userId,
+        afterValue: { status: input.toStatus },
+        beforeValue: { status: current.status },
+        correlationId,
+        reason: input.reason ?? null,
+        targetId: jobId,
+        targetType: 'job',
+      });
+      await client.query(
+        `INSERT INTO audit_events
+         (actor_user_id, action, target_type, target_id, correlation_id, reason, before_value, after_value, occurred_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+        [
+          audit.actorUserId,
+          audit.action,
+          audit.targetType,
+          audit.targetId,
+          audit.correlationId,
+          audit.reason,
+          audit.beforeValue,
+          audit.afterValue,
+          audit.occurredAt,
+        ],
+      );
       await client.query('COMMIT');
       return await this.get(client, jobId);
     } catch (error) {
-      await client.query('ROLLBACK');
+      await client.query('ROLLBACK').catch(() => undefined);
       throw error;
     } finally {
       await client.end();

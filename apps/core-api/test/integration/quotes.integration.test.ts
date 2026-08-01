@@ -54,6 +54,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL quote repository', () => {
         catalogItemId,
       ]);
       await client.query('DELETE FROM catalog_items WHERE id = $1', [catalogItemId]);
+      await client.query('DELETE FROM audit_events WHERE actor_user_id = $1', [userId]);
       await client.query('DELETE FROM identities WHERE user_id = $1', [userId]);
       await client.query('DELETE FROM users WHERE id = $1', [userId]);
     } finally {
@@ -75,6 +76,12 @@ describe.skipIf(!databaseUrl)('PostgreSQL quote repository', () => {
     const retry = await repository.createForSubject(subject, input);
     expect(quote).toMatchObject({ totalAmountMinor: '3998', items: [{ unitAmountMinor: '1999' }] });
     expect(retry?.id).toBe(quote?.id);
+    await expect(
+      client.query(
+        "SELECT action, after_value FROM audit_events WHERE actor_user_id=$1 AND action='quote.created'",
+        [userId],
+      ),
+    ).resolves.toMatchObject({ rowCount: 1 });
     await expect(
       client.query('UPDATE catalog_item_versions SET name = $1 WHERE id = $2', [
         'Modified Service',

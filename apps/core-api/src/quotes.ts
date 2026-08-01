@@ -1,5 +1,6 @@
 import { Client } from 'pg';
 import { z } from 'zod';
+import { createAuditEvent } from './audit.js';
 
 export const createQuoteSchema = z.object({
   customerProfileId: z.uuid().nullable().optional(),
@@ -32,6 +33,7 @@ export type QuoteRepository = {
   createForSubject(
     subject: string,
     input: z.infer<typeof createQuoteSchema>,
+    correlationId: string,
   ): Promise<Quote | null>;
 };
 type CatalogRow = {
@@ -61,6 +63,7 @@ export class PostgresQuoteRepository implements QuoteRepository {
   async createForSubject(
     subject: string,
     input: z.infer<typeof createQuoteSchema>,
+    correlationId: string,
   ): Promise<Quote | null> {
     const client = new Client({ connectionString: this.databaseUrl });
     try {
@@ -144,6 +147,32 @@ export class PostgresQuoteRepository implements QuoteRepository {
           ],
         );
       }
+      const audit = createAuditEvent({
+        action: 'quote.created',
+        actorUserId: userId,
+        afterValue: { currency, totalAmountMinor: totalAmountMinor.toString() },
+        beforeValue: null,
+        correlationId,
+        reason: null,
+        targetId: quoteId,
+        targetType: 'quote',
+      });
+      await client.query(
+        `INSERT INTO audit_events
+         (actor_user_id, action, target_type, target_id, correlation_id, reason, before_value, after_value, occurred_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+        [
+          audit.actorUserId,
+          audit.action,
+          audit.targetType,
+          audit.targetId,
+          audit.correlationId,
+          audit.reason,
+          audit.beforeValue,
+          audit.afterValue,
+          audit.occurredAt,
+        ],
+      );
       await client.query('COMMIT');
       return await this.getQuote(client, {
         currency,
@@ -151,7 +180,7 @@ export class PostgresQuoteRepository implements QuoteRepository {
         total_amount_minor: totalAmountMinor.toString(),
       });
     } catch (error) {
-      await client.query('ROLLBACK');
+      await client.query('ROLLBACK').catch(() => undefined);
       throw error;
     } finally {
       await client.end();
