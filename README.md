@@ -584,6 +584,12 @@ Track:
 
 Core owns the operational invoice and receipt records, while the processor remains authoritative for transaction processing and settlement. Invoices must support online website-service sales; retainers must be configurable recurring subscriptions rather than a special case of the device-protection plan.
 
+For recurring subscriptions, customer-facing applications submit the customer's selected plan and
+payment-method consent to Core. Core owns the automated lifecycle: due-date tracking, operational
+invoice creation, tokenized saved-card charges through Square, signed webhook handling, payment
+retries, grace periods, cancellation state, and billing notifications. This behavior must be
+configurable, idempotent, auditable, and shared by every Obsidian application.
+
 ---
 
 ## Phase 7 — Employees, timekeeping, and compensation

@@ -146,3 +146,13 @@ priorities:
       Support online-item checkout, website-service invoices, and configurable retainer subscriptions
       initiated by the Obsidian Systems website or Prospecting Engine. Core owns authorization,
       processor interactions, webhook handling, operational records, and final payment state.
+  - id: CORE-022
+    title: Automated subscription billing and dunning
+    status: proposed
+    priority: 22
+    dependencies: [CORE-012, CORE-013, CORE-021]
+    implementation_notes: >-
+      Core tracks due dates, creates operational invoices, charges Square tokenized saved payment
+      methods with customer authorization, processes signed webhooks, and runs idempotent configurable
+      retries, grace periods, cancellations, and billing notifications. Customer applications consume
+      subscription state and never charge cards or finalize payment state directly.
