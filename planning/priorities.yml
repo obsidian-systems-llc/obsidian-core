@@ -54,7 +54,7 @@ priorities:
       permissions, and resource-level authorization.
   - id: CORE-005
     title: Roles, permissions, and application entitlements
-    status: blocked
+    status: ready
     priority: 5
     dependencies: [CORE-004]
   - id: CORE-006
