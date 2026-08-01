@@ -7,6 +7,11 @@ import { checkDatabase } from './health.js';
 import type { OrganizationRepository } from './organizations.js';
 import type { CustomerRepository } from './customers.js';
 import type { EmployeeRepository } from './employees.js';
+import {
+  createTimeCorrectionSchema,
+  createTimeEntrySchema,
+  type TimekeepingRepository,
+} from './timekeeping.js';
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -20,6 +25,7 @@ export type BuildAppOptions = {
   organizationRepository?: OrganizationRepository;
   customerRepository?: CustomerRepository;
   employeeRepository?: EmployeeRepository;
+  timekeepingRepository?: TimekeepingRepository;
   verifyToken?: TokenVerifier;
 };
 
@@ -29,6 +35,7 @@ export function buildApp({
   organizationRepository,
   customerRepository,
   employeeRepository,
+  timekeepingRepository,
   verifyToken,
 }: BuildAppOptions = {}): FastifyInstance {
   const app = Fastify({ logger: { redact: ['req.headers.authorization', 'req.headers.cookie'] } });
@@ -124,6 +131,102 @@ export function buildApp({
                   code: 'EMPLOYEE_PROFILE_NOT_FOUND',
                   message: 'Employee profile not found.',
                 },
+              })
+            );
+          },
+        );
+      }
+      if (timekeepingRepository) {
+        const timekeepingRequirement = {
+          applicationKey: 'employee-portal',
+          permissionKey: 'timekeeping.self.manage',
+        };
+        app.get(
+          '/v1/employee-portal/time-entries',
+          {
+            preHandler: [
+              authenticate,
+              createAuthorizationGuard(authorizer, timekeepingRequirement),
+            ],
+          },
+          async (request, reply) => {
+            const entries = await timekeepingRepository.listForSubject(request.auth!.sub!);
+            return (
+              entries ??
+              reply.code(404).send({
+                error: {
+                  code: 'EMPLOYEE_PROFILE_NOT_FOUND',
+                  message: 'Employee profile not found.',
+                },
+              })
+            );
+          },
+        );
+        app.post(
+          '/v1/employee-portal/time-entries',
+          {
+            preHandler: [
+              authenticate,
+              createAuthorizationGuard(authorizer, timekeepingRequirement),
+            ],
+          },
+          async (request, reply) => {
+            const parsed = createTimeEntrySchema.safeParse(request.body);
+            if (!parsed.success)
+              return reply.code(400).send({
+                error: { code: 'INVALID_TIME_ENTRY', message: 'Time entry input is invalid.' },
+              });
+            const entry = await timekeepingRepository.createForSubject(
+              request.auth!.sub!,
+              parsed.data,
+            );
+            return (
+              entry ??
+              reply.code(404).send({
+                error: {
+                  code: 'EMPLOYEE_PROFILE_NOT_FOUND',
+                  message: 'Employee profile not found.',
+                },
+              })
+            );
+          },
+        );
+        app.post(
+          '/v1/employee-portal/time-entries/:id/corrections',
+          {
+            preHandler: [
+              authenticate,
+              createAuthorizationGuard(authorizer, timekeepingRequirement),
+            ],
+          },
+          async (request, reply) => {
+            const parsed = createTimeCorrectionSchema.safeParse(request.body);
+            if (!parsed.success)
+              return reply.code(400).send({
+                error: {
+                  code: 'INVALID_TIME_CORRECTION',
+                  message: 'Time correction input is invalid.',
+                },
+              });
+            const params = request.params as { id: string };
+            if (
+              !params.id ||
+              !createTimeEntrySchema.shape.idempotencyKey.safeParse(params.id).success
+            )
+              return reply.code(400).send({
+                error: { code: 'INVALID_TIME_ENTRY', message: 'Time entry ID is invalid.' },
+              });
+            const correlationId = request.headers['x-correlation-id'];
+            const entry = await timekeepingRepository.correctForSubject(
+              request.auth!.sub!,
+              params.id,
+              parsed.data,
+              typeof correlationId === 'string' ? correlationId : randomUUID(),
+            );
+            return (
+              entry ??
+              reply.code(404).send({
+                error: { code: 'TIME_ENTRY_NOT_FOUND', message: 'Time entry not found.' },
               })
             );
           },

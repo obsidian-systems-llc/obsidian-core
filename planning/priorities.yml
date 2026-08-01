@@ -101,12 +101,20 @@ priorities:
       audit, retention, and compliance controls are designed.
   - id: CORE-009
     title: Timekeeping and immutable corrections
-    status: ready
+    status: done
     priority: 9
     dependencies: [CORE-008]
+    acceptance_criteria:
+      - Time entries record completed work intervals in UTC with retry-safe idempotency and no floating-point duration calculations
+      - Corrections are immutable, require a reason, preserve the original entry, and create a safe audit event
+      - Employees can read and create only their own time entries through employee-portal authorization, with allowed and denied coverage
+    implementation_notes: >-
+      This iteration records time for all employee classifications, including salaried staff, but
+      does not calculate wages, overtime, or commissions. Those require effective-dated compensation
+      plans and payroll policy in CORE-014.
   - id: CORE-010
     title: Product/service catalog and versioned quote engine
-    status: blocked
+    status: ready
     priority: 10
     dependencies: [CORE-006]
   - id: CORE-011

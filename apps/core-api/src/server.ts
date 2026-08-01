@@ -8,6 +8,7 @@ import { PostgresOrganizationRepository } from './organizations.js';
 import { loadFieldEncryptor } from './encryption.js';
 import { PostgresCustomerRepository } from './customers.js';
 import { PostgresEmployeeRepository } from './employees.js';
+import { PostgresTimekeepingRepository } from './timekeeping.js';
 
 const environment = loadEnvironment();
 const fieldEncryptor = loadFieldEncryptor(environment);
@@ -17,6 +18,7 @@ const app = buildApp({
   organizationRepository: new PostgresOrganizationRepository(environment.DATABASE_URL),
   customerRepository: new PostgresCustomerRepository(environment.DATABASE_URL, fieldEncryptor),
   employeeRepository: new PostgresEmployeeRepository(environment.DATABASE_URL, fieldEncryptor),
+  timekeepingRepository: new PostgresTimekeepingRepository(environment.DATABASE_URL),
   verifyToken: createAuth0TokenVerifier(loadAuth0Config(environment)),
 });
 async function start(): Promise<void> {

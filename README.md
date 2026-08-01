@@ -84,6 +84,20 @@ administrative assignment workflows are intentionally not collected by this iter
 separate least-privilege access, audit, retention, encrypted-document-storage, and compliance
 controls before Core accepts them.
 
+### Timekeeping
+
+Core records completed work intervals in UTC for employees of every classification, including
+salaried employees. `GET` and `POST /v1/employee-portal/time-entries`, plus
+`POST /v1/employee-portal/time-entries/:id/corrections`, require `employee-portal` and
+`timekeeping.self.manage`; they are self-service boundaries tied to the authenticated employee
+profile. Creation and corrections require UUID idempotency keys. Time entries and corrections are
+append-only at the database layer. A correction requires a reason, preserves the original interval,
+becomes the effective interval for reads, and creates an audit event without storing sensitive time
+values in the audit metadata.
+
+This iteration records time but does not calculate payroll, overtime, hourly estimates, salaries,
+or commissions. Those calculations require effective-dated compensation and payroll policies.
+
 ### Square configuration placeholders
 
 `.env.example` contains separate sandbox and production placeholders for the future server-side Square
