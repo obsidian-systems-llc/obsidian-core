@@ -19,6 +19,7 @@ import {
   transitionJobSchema,
   type JobRepository,
 } from './jobs.js';
+import { subscriptionPlanVersionSchema, type SubscriptionPlanRepository } from './subscriptions.js';
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -35,6 +36,7 @@ export type BuildAppOptions = {
   timekeepingRepository?: TimekeepingRepository;
   quoteRepository?: QuoteRepository;
   jobRepository?: JobRepository;
+  subscriptionPlanRepository?: SubscriptionPlanRepository;
   verifyToken?: TokenVerifier;
 };
 
@@ -47,6 +49,7 @@ export function buildApp({
   timekeepingRepository,
   quoteRepository,
   jobRepository,
+  subscriptionPlanRepository,
   verifyToken,
 }: BuildAppOptions = {}): FastifyInstance {
   const app = Fastify({ logger: { redact: ['req.headers.authorization', 'req.headers.cookie'] } });
@@ -355,6 +358,31 @@ export function buildApp({
                 });
               throw error;
             }
+          },
+        );
+      }
+      if (subscriptionPlanRepository) {
+        app.post(
+          '/v1/executive/subscription-plan-versions',
+          {
+            preHandler: [
+              authenticate,
+              createAuthorizationGuard(authorizer, {
+                applicationKey: 'executive-panel',
+                permissionKey: 'subscription.plan.manage',
+              }),
+            ],
+          },
+          async (request, reply) => {
+            const parsed = subscriptionPlanVersionSchema.safeParse(request.body);
+            if (!parsed.success)
+              return reply.code(400).send({
+                error: {
+                  code: 'INVALID_SUBSCRIPTION_PLAN',
+                  message: 'Subscription plan input is invalid.',
+                },
+              });
+            return subscriptionPlanRepository.createVersion(parsed.data);
           },
         );
       }

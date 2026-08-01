@@ -140,6 +140,15 @@ does not make Square API calls, accept webhooks, or mutate payment state. Future
 must validate Square's HMAC-SHA256 header against the subscription signature key, exact notification
 URL, and raw request body before any processing.
 
+### Subscription plans
+
+Subscription plans and their effective-dated versions use integer minor-unit prices, cadence, and
+optional provider references. Customer subscriptions preserve the selected plan version and safe
+provider subscription reference—never card credentials. The initial configurable Device Protection
+default is `$15.00` monthly. Future plan versions are restricted to the `executive-panel`
+entitlement and `subscription.plan.manage` permission, so Executive users can change pricing or
+cadence without rewriting existing agreements.
+
 ### Bootstrap Super Admin
 
 The controlled `npm run db:seed` bootstrap creates or reactivates one Core user, maps a supplied

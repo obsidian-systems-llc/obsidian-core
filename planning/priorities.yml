@@ -150,12 +150,16 @@ priorities:
       finalization. Commerce360 remains deferred pending capability confirmation.
   - id: CORE-013
     title: Subscription model and $15/month protection-plan configuration
-    status: ready
+    status: done
     priority: 13
     dependencies: [CORE-007, CORE-010, CORE-012]
+    acceptance_criteria:
+      - Subscription plans and effective-dated versions preserve integer minor-unit price, cadence, and provider references
+      - Customer subscriptions retain their selected plan version and lifecycle dates without storing payment credentials
+      - Plan version creation requires executive-panel subscription.plan.manage authorization
   - id: CORE-014
     title: Commission engine with $20/hour plan and 10% default commission
-    status: blocked
+    status: ready
     priority: 14
     dependencies: [CORE-008, CORE-009, CORE-010, CORE-012]
   - id: CORE-015
