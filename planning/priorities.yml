@@ -88,12 +88,20 @@ priorities:
       - Customer profile access requires application authorization and membership-scoped retrieval
   - id: CORE-008
     title: Employee profiles and store assignments
-    status: ready
+    status: done
     priority: 8
     dependencies: [CORE-006]
+    acceptance_criteria:
+      - Employee profiles are separate from Auth0 identities and encrypt their profile payloads with authenticated application-layer encryption
+      - Employee assignments preserve effective store, department, and manager relationships without overwriting historical assignments
+      - Employee self-service profile access requires employee-portal authorization and employee.profile.read, with allowed and denied coverage
+    implementation_notes: >-
+      SSNs, identity-document copies, payroll tax data, compensation data, employee writes, and
+      administrative assignment workflows are deliberately deferred until their dedicated access,
+      audit, retention, and compliance controls are designed.
   - id: CORE-009
     title: Timekeeping and immutable corrections
-    status: blocked
+    status: ready
     priority: 9
     dependencies: [CORE-008]
   - id: CORE-010
@@ -184,3 +192,13 @@ priorities:
       Define source inventory, identity mapping, encryption requirements, validation, reconciliation,
       audit evidence, and rollback for Prospecting Engine and other backend customer or employee data.
       Do not import production data until the source schemas and retention obligations are reviewed.
+  - id: CORE-024
+    title: Sensitive employee identity documents and retention controls
+    status: proposed
+    priority: 24
+    dependencies: [CORE-008]
+    implementation_notes: >-
+      Design the legally justified collection, encrypted object storage, dedicated permissions,
+      access audit events, retention/deletion policy, and compliance review for SSNs, government
+      identity documents, payroll tax data, and other highly sensitive employment records. Do not
+      collect or migrate these values before that design is approved.

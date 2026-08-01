@@ -70,6 +70,20 @@ permission-controlled.
 
 Customer profiles and reusable addresses are separate from Auth0 identities. Their payloads are stored with AES-256-GCM application-layer encryption using `FIELD_ENCRYPTION_KEY` and `FIELD_ENCRYPTION_KEY_ID`; keys must be managed outside the repository. `GET /v1/customer-portal/profile` is membership-scoped and requires `customer-portal` plus `customer.profile.read`. Customer write and administrative workflows remain deferred.
 
+### Employee profiles and assignments
+
+Employee profiles are separate from Auth0 identities and store their profile payloads using the
+same AES-256-GCM application-layer encryption configuration as customer profiles. Core preserves
+effective-dated store, department, and manager assignments rather than overwriting prior
+assignments. `GET /v1/employee-portal/profile` is self-service only: it requires the
+`employee-portal` entitlement and `employee.profile.read` permission, and returns the profile
+linked to the authenticated identity together with currently effective assignments.
+
+SSNs, government-ID copies, payroll tax details, compensation data, employee write workflows, and
+administrative assignment workflows are intentionally not collected by this iteration. They require
+separate least-privilege access, audit, retention, encrypted-document-storage, and compliance
+controls before Core accepts them.
+
 ### Square configuration placeholders
 
 `.env.example` contains separate sandbox and production placeholders for the future server-side Square

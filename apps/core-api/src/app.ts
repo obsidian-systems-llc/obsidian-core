@@ -6,6 +6,7 @@ import { createAuthorizationGuard, type Authorizer } from './authorization.js';
 import { checkDatabase } from './health.js';
 import type { OrganizationRepository } from './organizations.js';
 import type { CustomerRepository } from './customers.js';
+import type { EmployeeRepository } from './employees.js';
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -18,6 +19,7 @@ export type BuildAppOptions = {
   authorizer?: Authorizer;
   organizationRepository?: OrganizationRepository;
   customerRepository?: CustomerRepository;
+  employeeRepository?: EmployeeRepository;
   verifyToken?: TokenVerifier;
 };
 
@@ -26,6 +28,7 @@ export function buildApp({
   authorizer,
   organizationRepository,
   customerRepository,
+  employeeRepository,
   verifyToken,
 }: BuildAppOptions = {}): FastifyInstance {
   const app = Fastify({ logger: { redact: ['req.headers.authorization', 'req.headers.cookie'] } });
@@ -94,6 +97,32 @@ export function buildApp({
                 error: {
                   code: 'CUSTOMER_PROFILE_NOT_FOUND',
                   message: 'Customer profile not found.',
+                },
+              })
+            );
+          },
+        );
+      }
+      if (employeeRepository) {
+        app.get(
+          '/v1/employee-portal/profile',
+          {
+            preHandler: [
+              authenticate,
+              createAuthorizationGuard(authorizer, {
+                applicationKey: 'employee-portal',
+                permissionKey: 'employee.profile.read',
+              }),
+            ],
+          },
+          async (request, reply) => {
+            const profile = await employeeRepository.getForSubject(request.auth!.sub!);
+            return (
+              profile ??
+              reply.code(404).send({
+                error: {
+                  code: 'EMPLOYEE_PROFILE_NOT_FOUND',
+                  message: 'Employee profile not found.',
                 },
               })
             );
