@@ -4,6 +4,7 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import { createAuthenticationGuard, type TokenVerifier } from './authentication.js';
 import { createAuthorizationGuard, type Authorizer } from './authorization.js';
 import { checkDatabase } from './health.js';
+import type { OrganizationRepository } from './organizations.js';
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -14,12 +15,14 @@ declare module 'fastify' {
 export type BuildAppOptions = {
   databaseUrl?: string;
   authorizer?: Authorizer;
+  organizationRepository?: OrganizationRepository;
   verifyToken?: TokenVerifier;
 };
 
 export function buildApp({
   databaseUrl,
   authorizer,
+  organizationRepository,
   verifyToken,
 }: BuildAppOptions = {}): FastifyInstance {
   const app = Fastify({ logger: { redact: ['req.headers.authorization', 'req.headers.cookie'] } });
@@ -53,6 +56,21 @@ export function buildApp({
         },
         async () => ({ status: 'authorized' }),
       );
+      if (organizationRepository) {
+        app.get(
+          '/v1/core-admin/organization-hierarchy',
+          {
+            preHandler: [
+              authenticate,
+              createAuthorizationGuard(authorizer, {
+                applicationKey: 'core-admin',
+                permissionKey: 'organization.read',
+              }),
+            ],
+          },
+          async () => organizationRepository.getHierarchy(),
+        );
+      }
     }
   }
   return app;

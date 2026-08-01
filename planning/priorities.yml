@@ -67,12 +67,19 @@ priorities:
       interfaces are deferred until their administration workflows are designed.
   - id: CORE-006
     title: Company, district, store, and department hierarchy
-    status: ready
+    status: done
     priority: 6
     dependencies: [CORE-005]
+    acceptance_criteria:
+      - Active organization, business unit, district, store, and department records are returned in parent hierarchy order
+      - Hierarchy reads require a Core Admin entitlement and organization.read permission
+      - Active parent lookup indexes and real PostgreSQL integration coverage support the hierarchy query
+    implementation_notes: >-
+      Organization read access is implemented before mutation workflows. Creation, changes,
+      deactivation, and approval/audit controls require a dedicated administration workflow.
   - id: CORE-007
     title: Customer profiles and shared addresses
-    status: blocked
+    status: ready
     priority: 7
     dependencies: [CORE-006]
   - id: CORE-008

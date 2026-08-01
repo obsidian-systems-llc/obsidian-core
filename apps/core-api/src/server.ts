@@ -4,11 +4,13 @@ import { buildApp } from './app.js';
 import { createAuth0TokenVerifier, loadAuth0Config } from './auth0.js';
 import { PostgresAuthorizer } from './authorization.js';
 import { loadEnvironment } from './env.js';
+import { PostgresOrganizationRepository } from './organizations.js';
 
 const environment = loadEnvironment();
 const app = buildApp({
   databaseUrl: environment.DATABASE_URL,
   authorizer: new PostgresAuthorizer(environment.DATABASE_URL),
+  organizationRepository: new PostgresOrganizationRepository(environment.DATABASE_URL),
   verifyToken: createAuth0TokenVerifier(loadAuth0Config(environment)),
 });
 async function start(): Promise<void> {

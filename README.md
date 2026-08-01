@@ -58,6 +58,21 @@ entitlement, roles, and permissions. Current role assignments and entitlements a
 their effective dates and deactivation state. User provisioning and role/entitlement administration
 will be added in later priorities; no user receives access by default.
 
+### Organization hierarchy
+
+`GET /v1/core-admin/organization-hierarchy` returns active organization, business unit, district,
+store, and department records in parent order. It requires the `core-admin` entitlement and
+`organization.read` permission. Core preserves unassigned departments explicitly rather than assigning
+them to an arbitrary store. Organization mutation workflows are deferred until they can be audited and
+permission-controlled.
+
+### Square configuration placeholders
+
+`.env.example` contains placeholders for the future server-side Square adapter: environment, access
+token, application ID, location ID, webhook signature key, webhook notification URL, and API version.
+Keep all values in environment-specific secret management. Never expose the access token or webhook
+signature key to any GUI, and do not add a Square SDK or processing code until CORE-012.
+
 ### Bootstrap Super Admin
 
 The controlled `npm run db:seed` bootstrap creates or reactivates one Core user, maps a supplied

@@ -53,13 +53,21 @@ try {
   );
   const applicationId = application.rows[0]?.id;
   if (!applicationId) throw new Error('Unable to resolve the Core Admin application.');
-  const permission = await client.query(
-    `INSERT INTO permissions (key, name) VALUES ('authorization.read', 'Read authorization')
-     ON CONFLICT (key) DO UPDATE SET name = EXCLUDED.name
-     RETURNING id`,
-  );
-  const permissionId = permission.rows[0]?.id;
-  if (!permissionId) throw new Error('Unable to resolve the authorization permission.');
+  const permissionIds = [];
+  for (const permissionDefinition of [
+    ['authorization.read', 'Read authorization'],
+    ['organization.read', 'Read organization hierarchy'],
+  ]) {
+    const permission = await client.query(
+      `INSERT INTO permissions (key, name) VALUES ($1, $2)
+       ON CONFLICT (key) DO UPDATE SET name = EXCLUDED.name
+       RETURNING id`,
+      permissionDefinition,
+    );
+    const permissionId = permission.rows[0]?.id;
+    if (!permissionId) throw new Error('Unable to resolve a bootstrap permission.');
+    permissionIds.push(permissionId);
+  }
   const role = await client.query(
     `INSERT INTO roles (application_id, key, name, deactivated_at)
      VALUES ($1, 'super-admin', 'Super Admin', NULL)
@@ -70,11 +78,13 @@ try {
   const roleId = role.rows[0]?.id;
   if (!roleId) throw new Error('Unable to resolve the Super Admin role.');
 
-  await client.query(
-    `INSERT INTO role_permissions (role_id, permission_id)
-     VALUES ($1, $2) ON CONFLICT (role_id, permission_id) DO NOTHING`,
-    [roleId, permissionId],
-  );
+  for (const permissionId of permissionIds) {
+    await client.query(
+      `INSERT INTO role_permissions (role_id, permission_id)
+       VALUES ($1, $2) ON CONFLICT (role_id, permission_id) DO NOTHING`,
+      [roleId, permissionId],
+    );
+  }
   await client.query(
     `INSERT INTO user_roles (user_id, role_id)
      SELECT $1, $2
