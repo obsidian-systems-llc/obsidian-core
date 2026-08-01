@@ -149,6 +149,14 @@ default is `$15.00` monthly. Future plan versions are restricted to the `executi
 entitlement and `subscription.plan.manage` permission, so Executive users can change pricing or
 cadence without rewriting existing agreements.
 
+### Compensation and commissions
+
+Core uses effective-dated hourly or salary compensation plans and employee assignments. Commission
+entries snapshot eligible revenue, a configurable basis-point rate, attribution, and lifecycle
+status using integer minor units. The initial configuration is `$20.00/hour` and `10%`, but it is
+versioned policy rather than a hard-coded payroll rule. Earnings remain estimates until finalized
+through payroll export.
+
 ### Bootstrap Super Admin
 
 The controlled `npm run db:seed` bootstrap creates or reactivates one Core user, maps a supplied

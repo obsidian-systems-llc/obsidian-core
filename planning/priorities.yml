@@ -159,12 +159,12 @@ priorities:
       - Plan version creation requires executive-panel subscription.plan.manage authorization
   - id: CORE-014
     title: Commission engine with $20/hour plan and 10% default commission
-    status: ready
+    status: done
     priority: 14
     dependencies: [CORE-008, CORE-009, CORE-010, CORE-012]
   - id: CORE-015
     title: Store/district/company sales and wage aggregates
-    status: blocked
+    status: ready
     priority: 15
     dependencies: [CORE-006, CORE-009, CORE-014]
   - id: CORE-016
