@@ -66,12 +66,18 @@ store, and department records in parent order. It requires the `core-admin` enti
 them to an arbitrary store. Organization mutation workflows are deferred until they can be audited and
 permission-controlled.
 
+### Customer profiles and addresses
+
+Customer profiles and reusable addresses are separate from Auth0 identities. Their payloads are stored with AES-256-GCM application-layer encryption using `FIELD_ENCRYPTION_KEY` and `FIELD_ENCRYPTION_KEY_ID`; keys must be managed outside the repository. `GET /v1/customer-portal/profile` is membership-scoped and requires `customer-portal` plus `customer.profile.read`. Customer write and administrative workflows remain deferred.
+
 ### Square configuration placeholders
 
-`.env.example` contains placeholders for the future server-side Square adapter: environment, access
-token, application ID, location ID, webhook signature key, webhook notification URL, and API version.
-Keep all values in environment-specific secret management. Never expose the access token or webhook
-signature key to any GUI, and do not add a Square SDK or processing code until CORE-012.
+`.env.example` contains separate sandbox and production placeholders for the future server-side Square
+adapter: access token, application ID, location ID, webhook signature key, notification URL, and API
+version. `SQUARE_ENVIRONMENT` selects the active mode. Development and test deployments must select
+`sandbox`; the future adapter will reject production mode unless `NODE_ENV=production`. Keep all values
+in environment-specific secret management. Never expose access tokens or webhook signature keys to any
+GUI, and do not add Square processing code until CORE-012.
 
 ### Bootstrap Super Admin
 

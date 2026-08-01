@@ -79,12 +79,16 @@ priorities:
       deactivation, and approval/audit controls require a dedicated administration workflow.
   - id: CORE-007
     title: Customer profiles and shared addresses
-    status: ready
+    status: done
     priority: 7
     dependencies: [CORE-006]
+    acceptance_criteria:
+      - Customer profiles and reusable addresses are separate from Auth0 identities and support shared account memberships
+      - Customer profile and address payloads use authenticated application-layer encryption
+      - Customer profile access requires application authorization and membership-scoped retrieval
   - id: CORE-008
     title: Employee profiles and store assignments
-    status: blocked
+    status: ready
     priority: 8
     dependencies: [CORE-006]
   - id: CORE-009

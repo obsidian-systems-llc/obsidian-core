@@ -7,6 +7,8 @@ const environmentSchema = z.object({
   DATABASE_URL: z.string().url().startsWith('postgresql://'),
   AUTH0_DOMAIN: z.string().min(1),
   AUTH0_AUDIENCE: z.string().url(),
+  FIELD_ENCRYPTION_KEY: z.string().min(1),
+  FIELD_ENCRYPTION_KEY_ID: z.string().min(1),
 });
 
 export type Environment = z.infer<typeof environmentSchema>;

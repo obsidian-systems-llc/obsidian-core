@@ -5,6 +5,7 @@ import { createAuthenticationGuard, type TokenVerifier } from './authentication.
 import { createAuthorizationGuard, type Authorizer } from './authorization.js';
 import { checkDatabase } from './health.js';
 import type { OrganizationRepository } from './organizations.js';
+import type { CustomerRepository } from './customers.js';
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -16,6 +17,7 @@ export type BuildAppOptions = {
   databaseUrl?: string;
   authorizer?: Authorizer;
   organizationRepository?: OrganizationRepository;
+  customerRepository?: CustomerRepository;
   verifyToken?: TokenVerifier;
 };
 
@@ -23,6 +25,7 @@ export function buildApp({
   databaseUrl,
   authorizer,
   organizationRepository,
+  customerRepository,
   verifyToken,
 }: BuildAppOptions = {}): FastifyInstance {
   const app = Fastify({ logger: { redact: ['req.headers.authorization', 'req.headers.cookie'] } });
@@ -69,6 +72,32 @@ export function buildApp({
             ],
           },
           async () => organizationRepository.getHierarchy(),
+        );
+      }
+      if (customerRepository) {
+        app.get(
+          '/v1/customer-portal/profile',
+          {
+            preHandler: [
+              authenticate,
+              createAuthorizationGuard(authorizer, {
+                applicationKey: 'customer-portal',
+                permissionKey: 'customer.profile.read',
+              }),
+            ],
+          },
+          async (request, reply) => {
+            const profile = await customerRepository.getForSubject(request.auth!.sub!);
+            return (
+              profile ??
+              reply.code(404).send({
+                error: {
+                  code: 'CUSTOMER_PROFILE_NOT_FOUND',
+                  message: 'Customer profile not found.',
+                },
+              })
+            );
+          },
         );
       }
     }
