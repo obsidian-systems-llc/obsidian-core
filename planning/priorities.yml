@@ -164,3 +164,12 @@ priorities:
       methods with customer authorization, processes signed webhooks, and runs idempotent configurable
       retries, grace periods, cancellations, and billing notifications. Customer applications consume
       subscription state and never charge cards or finalize payment state directly.
+  - id: CORE-023
+    title: Legacy identity and profile migration framework
+    status: proposed
+    priority: 23
+    dependencies: [CORE-007, CORE-008]
+    implementation_notes: >-
+      Define source inventory, identity mapping, encryption requirements, validation, reconciliation,
+      audit evidence, and rollback for Prospecting Engine and other backend customer or employee data.
+      Do not import production data until the source schemas and retention obligations are reviewed.

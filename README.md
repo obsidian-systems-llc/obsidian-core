@@ -58,6 +58,17 @@ entitlement, roles, and permissions. Current role assignments and entitlements a
 their effective dates and deactivation state. User provisioning and role/entitlement administration
 will be added in later priorities; no user receives access by default.
 
+### Bootstrap Super Admin
+
+The controlled `npm run db:seed` bootstrap creates or reactivates one Core user, maps a supplied
+Auth0 User ID, and grants the initial `core-admin` entitlement with the currently defined
+`authorization.read` permission. It is disabled by default and requires all three environment
+variables: `BOOTSTRAP_SUPER_ADMIN=true`, `BOOTSTRAP_SUPER_ADMIN_EMAIL`, and
+`BOOTSTRAP_SUPER_ADMIN_AUTH0_SUBJECT`. The email and Auth0 subject are local operational data and
+must never be committed. The seed is idempotent and refuses to remap an Auth0 subject already
+assigned to another Core user. "Super Admin" does not bypass authorization; future permissions must
+be assigned explicitly as they are introduced.
+
 ### Observability
 
 Core API requests receive or propagate `x-correlation-id` and include it in structured logs. `GET /health`
