@@ -8,6 +8,25 @@ permissions:
 jobs:
   quality:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_DB: obsidian_core
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_USER: postgres
+        options: >-
+          --health-cmd "pg_isready -U postgres -d obsidian_core"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+    env:
+      AUTH0_AUDIENCE: https://api.test.obsidian-systems.tech
+      AUTH0_DOMAIN: test.us.auth0.com
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/obsidian_core
+      POSTGRES_BIN: /usr/bin
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -18,6 +37,7 @@ jobs:
       - run: npm run format:check
       - run: npm run lint
       - run: npm run typecheck
+      - run: npm run db:migrate
       - run: npm test
       - run: npm run test:integration
       - run: npm run db:validate

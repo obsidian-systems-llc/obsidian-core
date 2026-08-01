@@ -54,12 +54,20 @@ priorities:
       permissions, and resource-level authorization.
   - id: CORE-005
     title: Roles, permissions, and application entitlements
-    status: ready
+    status: done
     priority: 5
     dependencies: [CORE-004]
+    acceptance_criteria:
+      - Core resolves Auth0 identities to active internal users and evaluates current application entitlements and role permissions server-side
+      - Protected application routes default to deny and return a stable forbidden error unless both an entitlement and permission are present
+      - Authorization unit and real PostgreSQL integration tests cover allowed and denied access paths
+    implementation_notes: >-
+      Auth0 authentication remains separate from Core authorization. Initial authorization enforcement
+      uses the core-admin application and authorization.read permission; role and entitlement management
+      interfaces are deferred until their administration workflows are designed.
   - id: CORE-006
     title: Company, district, store, and department hierarchy
-    status: blocked
+    status: ready
     priority: 6
     dependencies: [CORE-005]
   - id: CORE-007

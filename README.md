@@ -6,7 +6,7 @@ Customer-facing, employee-facing, administrative, and executive applications mus
 
 ## Current implementation
 
-The repository currently contains the foundation for a backend-only Node.js service. `apps/core-api` uses Fastify and strict TypeScript, and exposes only `GET /health` while database, identity, authorization, audit, and business domains are built in priority order. No graphical user interface is included in this repository. Future Vercel-hosted customer, employee, administrative, and executive applications must communicate with Core through authenticated APIs and must not become independent systems of record.
+The repository currently contains the foundation for a backend-only Node.js service. `apps/core-api` uses Fastify and strict TypeScript, and exposes health, readiness, identity, and initial authorization boundaries while database, identity, authorization, audit, and business domains are built in priority order. No graphical user interface is included in this repository. Future Vercel-hosted customer, employee, administrative, and executive applications must communicate with Core through authenticated APIs and must not become independent systems of record.
 
 ### Identity provider
 
@@ -14,7 +14,16 @@ Auth0 is the selected identity provider. Applications will use OIDC Authorizatio
 
 Before enabling login, create separate Auth0 tenants for development, staging, and production; configure each API audience and allowed callback/logout URLs; then set `AUTH0_DOMAIN` and `AUTH0_AUDIENCE` through secret management. Never commit client secrets or management API credentials.
 
-`GET /v1/identity/me` is Core's initial protected API boundary. It requires an `Authorization: Bearer <token>` header, verifies the Auth0 RS256 signature through the tenant JWKS, and validates both issuer and API audience. Missing, malformed, invalid, or wrong-audience tokens receive `401` with the stable `UNAUTHENTICATED` error code. `/health` and `/ready` intentionally remain unauthenticated operational endpoints. This endpoint confirms authentication only; it does not grant an application entitlement or business permission, which are enforced in the next authorization priority.
+`GET /v1/identity/me` is Core's initial protected API boundary. It requires an `Authorization: Bearer <token>` header, verifies the Auth0 RS256 signature through the tenant JWKS, and validates both issuer and API audience. Missing, malformed, invalid, or wrong-audience tokens receive `401` with the stable `UNAUTHENTICATED` error code. `/health` and `/ready` intentionally remain unauthenticated operational endpoints.
+
+### Authorization
+
+Core resolves each Auth0 subject to an active internal user, then requires both an active application
+entitlement and an effective role permission. Authorization is default-deny: authentication alone
+does not grant any application access. `GET /v1/core-admin/authorization/access` is the initial
+authorization-enforced boundary and requires the server-declared `core-admin` application
+entitlement and `authorization.read` permission; missing authorization returns `403 FORBIDDEN`.
+Future resource routes will use this same server-side guard and add organization/resource scope checks.
 
 ### Local development
 
@@ -43,6 +52,11 @@ verified against their recorded checksums.
 applications, roles, permissions, entitlements, and audit events. Each table uses a UUID primary key and
 UTC timestamps. Migration files are append-only: their SHA-256 checksums are recorded in
 `schema_migrations`, and a changed historical migration is rejected before it can be applied.
+
+`CORE-005` uses the foundation tables to resolve an Auth0 identity to a Core user, application
+entitlement, roles, and permissions. Current role assignments and entitlements are evaluated using
+their effective dates and deactivation state. User provisioning and role/entitlement administration
+will be added in later priorities; no user receives access by default.
 
 ### Observability
 

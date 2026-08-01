@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { JWTPayload } from 'jose';
 import Fastify, { type FastifyInstance } from 'fastify';
 import { createAuthenticationGuard, type TokenVerifier } from './authentication.js';
+import { createAuthorizationGuard, type Authorizer } from './authorization.js';
 import { checkDatabase } from './health.js';
 
 declare module 'fastify' {
@@ -12,10 +13,15 @@ declare module 'fastify' {
 
 export type BuildAppOptions = {
   databaseUrl?: string;
+  authorizer?: Authorizer;
   verifyToken?: TokenVerifier;
 };
 
-export function buildApp({ databaseUrl, verifyToken }: BuildAppOptions = {}): FastifyInstance {
+export function buildApp({
+  databaseUrl,
+  authorizer,
+  verifyToken,
+}: BuildAppOptions = {}): FastifyInstance {
   const app = Fastify({ logger: { redact: ['req.headers.authorization', 'req.headers.cookie'] } });
   app.addHook('onRequest', async (request, reply) => {
     const correlationId = request.headers['x-correlation-id'] ?? randomUUID();
@@ -29,13 +35,25 @@ export function buildApp({ databaseUrl, verifyToken }: BuildAppOptions = {}): Fa
     return { status: 'ready' };
   });
   if (verifyToken) {
-    app.get(
-      '/v1/identity/me',
-      { preHandler: createAuthenticationGuard(verifyToken) },
-      async (request) => ({
-        subject: request.auth?.sub,
-      }),
-    );
+    const authenticate = createAuthenticationGuard(verifyToken);
+    app.get('/v1/identity/me', { preHandler: authenticate }, async (request) => ({
+      subject: request.auth?.sub,
+    }));
+    if (authorizer) {
+      app.get(
+        '/v1/core-admin/authorization/access',
+        {
+          preHandler: [
+            authenticate,
+            createAuthorizationGuard(authorizer, {
+              applicationKey: 'core-admin',
+              permissionKey: 'authorization.read',
+            }),
+          ],
+        },
+        async () => ({ status: 'authorized' }),
+      );
+    }
   }
   return app;
 }
