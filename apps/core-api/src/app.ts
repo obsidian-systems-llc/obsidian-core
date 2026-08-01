@@ -13,6 +13,12 @@ import {
   type TimekeepingRepository,
 } from './timekeeping.js';
 import { createQuoteSchema, QuoteInputError, type QuoteRepository } from './quotes.js';
+import {
+  createJobSchema,
+  JobTransitionError,
+  transitionJobSchema,
+  type JobRepository,
+} from './jobs.js';
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -28,6 +34,7 @@ export type BuildAppOptions = {
   employeeRepository?: EmployeeRepository;
   timekeepingRepository?: TimekeepingRepository;
   quoteRepository?: QuoteRepository;
+  jobRepository?: JobRepository;
   verifyToken?: TokenVerifier;
 };
 
@@ -39,6 +46,7 @@ export function buildApp({
   employeeRepository,
   timekeepingRepository,
   quoteRepository,
+  jobRepository,
   verifyToken,
 }: BuildAppOptions = {}): FastifyInstance {
   const app = Fastify({ logger: { redact: ['req.headers.authorization', 'req.headers.cookie'] } });
@@ -274,7 +282,89 @@ export function buildApp({
           },
         );
       }
+      if (jobRepository) {
+        app.post(
+          '/v1/core-admin/jobs',
+          {
+            preHandler: [
+              authenticate,
+              createAuthorizationGuard(authorizer, {
+                applicationKey: 'core-admin',
+                permissionKey: 'job.create',
+              }),
+            ],
+          },
+          async (request, reply) => {
+            const parsed = createJobSchema.safeParse(request.body);
+            if (!parsed.success)
+              return reply
+                .code(400)
+                .send({ error: { code: 'INVALID_JOB', message: 'Job input is invalid.' } });
+            const job = await jobRepository.createForSubject(request.auth!.sub!, parsed.data);
+            return (
+              job ??
+              reply.code(404).send({
+                error: { code: 'JOB_ACTOR_NOT_FOUND', message: 'Job actor was not found.' },
+              })
+            );
+          },
+        );
+        app.post(
+          '/v1/core-admin/jobs/:id/transitions',
+          {
+            preHandler: [
+              authenticate,
+              createAuthorizationGuard(authorizer, {
+                applicationKey: 'core-admin',
+                permissionKey: 'job.transition',
+              }),
+            ],
+          },
+          async (request, reply) => {
+            const parsed = transitionJobSchema.safeParse(request.body);
+            const id = (request.params as { id: string }).id;
+            if (!parsed.success || !zUuid(id))
+              return reply.code(400).send({
+                error: {
+                  code: 'INVALID_JOB_TRANSITION',
+                  message: 'Job transition input is invalid.',
+                },
+              });
+            try {
+              const job = await jobRepository.transitionForSubject(
+                request.auth!.sub!,
+                id,
+                parsed.data,
+                typeof request.headers['x-correlation-id'] === 'string'
+                  ? request.headers['x-correlation-id']
+                  : randomUUID(),
+              );
+              return (
+                job ??
+                reply
+                  .code(404)
+                  .send({ error: { code: 'JOB_NOT_FOUND', message: 'Job not found.' } })
+              );
+            } catch (error) {
+              if (error instanceof JobTransitionError)
+                return reply.code(409).send({
+                  error: {
+                    code: 'INVALID_JOB_TRANSITION',
+                    message: 'Job transition is not allowed.',
+                  },
+                });
+              throw error;
+            }
+          },
+        );
+      }
     }
   }
   return app;
+}
+
+function zUuid(value: string | undefined): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+    value ?? '',
+  );
 }

@@ -110,6 +110,15 @@ The initial engine is intentionally limited to catalog-derived, single-currency 
 discounts, store overrides, manual overrides, approval/issue states, customer acceptance evidence,
 and payment conversion require separate policy and audit workflows.
 
+### Jobs and appointments
+
+Core creates jobs with appointment windows and optional customer, quote, and employee references.
+`POST /v1/core-admin/jobs` requires `job.create`; job transitions use
+`POST /v1/core-admin/jobs/:id/transitions` and require `job.transition`. Core permits only its
+defined workflow transitions and records each transition immutably with an actor, reason,
+idempotency key, and correlation ID. Mapping and route optimization are deferred to a dedicated
+provider adapter after route-stop and dispatch policies are defined.
+
 ### Square configuration placeholders
 
 `.env.example` contains separate sandbox and production placeholders for the future server-side Square

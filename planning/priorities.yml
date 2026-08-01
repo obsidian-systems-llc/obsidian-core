@@ -127,12 +127,16 @@ priorities:
       designed policy and audit workflows.
   - id: CORE-011
     title: Jobs, appointments, and workflow state machine
-    status: ready
+    status: done
     priority: 11
     dependencies: [CORE-007, CORE-008, CORE-010]
+    acceptance_criteria:
+      - Jobs and appointment windows are Core records linked to customers, quotes, and employee assignments where supplied
+      - Job state transitions are append-only, attributed, idempotent, and rejected unless allowed by the server workflow
+      - Job creation and transition routes require separate Core Admin permissions with allowed and denied coverage
   - id: CORE-012
     title: Payment-provider capability spike and adapter contract
-    status: blocked
+    status: ready
     priority: 12
     dependencies: [CORE-005]
     implementation_notes: >-
@@ -218,3 +222,12 @@ priorities:
       access audit events, retention/deletion policy, and compliance review for SSNs, government
       identity documents, payroll tax data, and other highly sensitive employment records. Do not
       collect or migrate these values before that design is approved.
+  - id: CORE-025
+    title: Route planning and mapping provider adapter
+    status: proposed
+    priority: 25
+    dependencies: [CORE-011]
+    implementation_notes: >-
+      Introduce Core-owned route and route-stop records plus a provider abstraction for geocoding,
+      travel time, route optimization, and navigation deep links. Front-end applications render maps
+      and navigation while Core retains dispatch decisions, provider secrets, and operational route data.
