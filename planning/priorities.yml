@@ -95,7 +95,8 @@ priorities:
     implementation_notes: >-
       Square is the interim provider. Verify Square sandbox, subscriptions, hosted or tokenized
       collection, webhooks, settlement reporting, refunds, terminals, and idempotency before any
-      processor-specific implementation. Commerce360 remains deferred pending capability confirmation.
+      processor-specific implementation. Core, not any GUI, must own processor calls and payment-state
+      finalization. Commerce360 remains deferred pending capability confirmation.
   - id: CORE-013
     title: Subscription model and $15/month protection-plan configuration
     status: blocked
@@ -136,3 +137,12 @@ priorities:
     status: blocked
     priority: 20
     dependencies: [CORE-009, CORE-014]
+  - id: CORE-021
+    title: Website invoices and retainer subscriptions
+    status: proposed
+    priority: 21
+    dependencies: [CORE-007, CORE-012]
+    implementation_notes: >-
+      Support online-item checkout, website-service invoices, and configurable retainer subscriptions
+      initiated by the Obsidian Systems website or Prospecting Engine. Core owns authorization,
+      processor interactions, webhook handling, operational records, and final payment state.

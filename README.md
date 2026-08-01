@@ -78,6 +78,7 @@ uncommitted until it can be validated.
 6. Obsidian Customer Account Portal
 7. Obsidian Employee Web Portal
 8. Obsidian Core Admin Portal
+9. Obsidian Prospecting Engine
 
 ## Guiding principles
 
@@ -539,6 +540,11 @@ capabilities are confirmed.
 All applications must send payment requests to Core APIs. They must not integrate directly with
 Square or any future payment processor.
 
+The Obsidian Systems website and Obsidian Prospecting Engine may initiate online-item checkout,
+website-service invoices, and retainer subscriptions through Core. Core authorizes the request,
+performs the Square interaction, verifies webhooks, and finalizes the audited payment, invoice, or
+subscription state. GUIs never receive Square secret credentials or finalize payment state directly.
+
 Required capabilities to confirm:
 
 - Hosted or tokenized payment collection
@@ -576,7 +582,7 @@ Track:
 
 ### Step 6.4: Invoice and receipt records
 
-Core owns the operational invoice and receipt records, while the processor remains authoritative for transaction processing and settlement.
+Core owns the operational invoice and receipt records, while the processor remains authoritative for transaction processing and settlement. Invoices must support online website-service sales; retainers must be configurable recurring subscriptions rather than a special case of the device-protection plan.
 
 ---
 
