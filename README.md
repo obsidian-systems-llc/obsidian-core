@@ -531,7 +531,13 @@ Design mobile operations to tolerate intermittent connectivity. Queue safe actio
 
 ### Step 6.1: Payment-provider adapter
 
-Create a provider-independent payments interface. Verify Commerce360/GoDaddy capabilities before implementing provider-specific code.
+Create a provider-independent payments interface. Square is the interim payment provider because
+Commerce360/GoDaddy online-payment and subscription capabilities are not yet confirmed. Verify
+Square capabilities before implementing its adapter; defer any Commerce360 adapter until its
+capabilities are confirmed.
+
+All applications must send payment requests to Core APIs. They must not integrate directly with
+Square or any future payment processor.
 
 Required capabilities to confirm:
 

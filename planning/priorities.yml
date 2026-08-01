@@ -92,6 +92,10 @@ priorities:
     status: blocked
     priority: 12
     dependencies: [CORE-005]
+    implementation_notes: >-
+      Square is the interim provider. Verify Square sandbox, subscriptions, hosted or tokenized
+      collection, webhooks, settlement reporting, refunds, terminals, and idempotency before any
+      processor-specific implementation. Commerce360 remains deferred pending capability confirmation.
   - id: CORE-013
     title: Subscription model and $15/month protection-plan configuration
     status: blocked
