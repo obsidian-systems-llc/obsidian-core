@@ -19,6 +19,7 @@ import {
   transitionJobSchema,
   type JobRepository,
 } from './jobs.js';
+import type { ReportingRepository } from './reporting.js';
 import { subscriptionPlanVersionSchema, type SubscriptionPlanRepository } from './subscriptions.js';
 
 declare module 'fastify' {
@@ -37,6 +38,7 @@ export type BuildAppOptions = {
   quoteRepository?: QuoteRepository;
   jobRepository?: JobRepository;
   subscriptionPlanRepository?: SubscriptionPlanRepository;
+  reportingRepository?: ReportingRepository;
   verifyToken?: TokenVerifier;
 };
 
@@ -50,6 +52,7 @@ export function buildApp({
   quoteRepository,
   jobRepository,
   subscriptionPlanRepository,
+  reportingRepository,
   verifyToken,
 }: BuildAppOptions = {}): FastifyInstance {
   const app = Fastify({ logger: { redact: ['req.headers.authorization', 'req.headers.cookie'] } });
@@ -386,6 +389,20 @@ export function buildApp({
           },
         );
       }
+      if (reportingRepository)
+        app.get(
+          '/v1/executive/operating-aggregates',
+          {
+            preHandler: [
+              authenticate,
+              createAuthorizationGuard(authorizer, {
+                applicationKey: 'executive-panel',
+                permissionKey: 'reporting.read',
+              }),
+            ],
+          },
+          async (request) => reportingRepository.listForSubject(request.auth!.sub!),
+        );
     }
   }
   return app;

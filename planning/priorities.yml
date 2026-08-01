@@ -164,7 +164,11 @@ priorities:
     dependencies: [CORE-008, CORE-009, CORE-010, CORE-012]
   - id: CORE-015
     title: Store/district/company sales and wage aggregates
-    status: ready
+    status: done
+    acceptance_criteria:
+      - Daily store, district, and company aggregates distinguish sales and estimated workforce costs in integer minor units
+      - Aggregate records preserve source status and refresh metadata rather than claiming finalized accounting data
+      - Executive aggregate reads require executive-panel reporting.read authorization
     priority: 15
     dependencies: [CORE-006, CORE-009, CORE-014]
   - id: CORE-016

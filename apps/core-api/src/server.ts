@@ -12,6 +12,7 @@ import { PostgresTimekeepingRepository } from './timekeeping.js';
 import { PostgresQuoteRepository } from './quotes.js';
 import { PostgresJobRepository } from './jobs.js';
 import { PostgresSubscriptionPlanRepository } from './subscriptions.js';
+import { PostgresReportingRepository } from './reporting.js';
 
 const environment = loadEnvironment();
 const fieldEncryptor = loadFieldEncryptor(environment);
@@ -25,6 +26,7 @@ const app = buildApp({
   quoteRepository: new PostgresQuoteRepository(environment.DATABASE_URL),
   jobRepository: new PostgresJobRepository(environment.DATABASE_URL),
   subscriptionPlanRepository: new PostgresSubscriptionPlanRepository(environment.DATABASE_URL),
+  reportingRepository: new PostgresReportingRepository(environment.DATABASE_URL),
   verifyToken: createAuth0TokenVerifier(loadAuth0Config(environment)),
 });
 async function start(): Promise<void> {

@@ -157,6 +157,15 @@ status using integer minor units. The initial configuration is `$20.00/hour` and
 versioned policy rather than a hard-coded payroll rule. Earnings remain estimates until finalized
 through payroll export.
 
+### Operating aggregates
+
+Core persists daily store, district, and company aggregate records that keep gross sales, discounts,
+refunds, net/collected/outstanding revenue, estimated hourly wages, estimated commissions, and
+finalized payroll distinct. Aggregate records identify whether their source is estimated or
+finalized; they are not accounting statements until their source systems finalize them.
+`GET /v1/executive/operating-aggregates` requires `executive-panel` and `reporting.read`; Core
+filters aggregate rows to the executive's effective organization scope.
+
 ### Bootstrap Super Admin
 
 The controlled `npm run db:seed` bootstrap creates or reactivates one Core user, maps a supplied
