@@ -114,12 +114,20 @@ priorities:
       plans and payroll policy in CORE-014.
   - id: CORE-010
     title: Product/service catalog and versioned quote engine
-    status: ready
+    status: done
     priority: 10
     dependencies: [CORE-006]
+    acceptance_criteria:
+      - Catalog item versions preserve effective dates and integer minor-unit prices without rewriting historical versions
+      - Core creates idempotent quotes from active catalog versions and snapshots line prices, quantities, and pricing context
+      - Quote creation is server-authorized and has allowed, denied, validation, and real-PostgreSQL coverage
+    implementation_notes: >-
+      This initial quote engine supports catalog-derived line items only. Taxes, discounts, store
+      overrides, customer acceptance evidence, approvals, and manual overrides require separately
+      designed policy and audit workflows.
   - id: CORE-011
     title: Jobs, appointments, and workflow state machine
-    status: blocked
+    status: ready
     priority: 11
     dependencies: [CORE-007, CORE-008, CORE-010]
   - id: CORE-012

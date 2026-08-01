@@ -98,6 +98,18 @@ values in the audit metadata.
 This iteration records time but does not calculate payroll, overtime, hourly estimates, salaries,
 or commissions. Those calculations require effective-dated compensation and payroll policies.
 
+### Catalog and quotes
+
+Core stores products, services, parts, labor, and fees as effective-dated catalog versions with
+integer minor-unit prices. `POST /v1/core-admin/quotes` requires `core-admin` and `quote.create`.
+It accepts catalog item keys, integer quantities, and an idempotency key; Core resolves active
+versions, calculates the total, and snapshots the resolved item/version/name/price/quantity and
+pricing context. A later catalog version cannot change an existing quote.
+
+The initial engine is intentionally limited to catalog-derived, single-currency lines. Tax,
+discounts, store overrides, manual overrides, approval/issue states, customer acceptance evidence,
+and payment conversion require separate policy and audit workflows.
+
 ### Square configuration placeholders
 
 `.env.example` contains separate sandbox and production placeholders for the future server-side Square

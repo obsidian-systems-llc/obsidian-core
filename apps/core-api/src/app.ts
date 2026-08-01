@@ -12,6 +12,7 @@ import {
   createTimeEntrySchema,
   type TimekeepingRepository,
 } from './timekeeping.js';
+import { createQuoteSchema, QuoteInputError, type QuoteRepository } from './quotes.js';
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -26,6 +27,7 @@ export type BuildAppOptions = {
   customerRepository?: CustomerRepository;
   employeeRepository?: EmployeeRepository;
   timekeepingRepository?: TimekeepingRepository;
+  quoteRepository?: QuoteRepository;
   verifyToken?: TokenVerifier;
 };
 
@@ -36,6 +38,7 @@ export function buildApp({
   customerRepository,
   employeeRepository,
   timekeepingRepository,
+  quoteRepository,
   verifyToken,
 }: BuildAppOptions = {}): FastifyInstance {
   const app = Fastify({ logger: { redact: ['req.headers.authorization', 'req.headers.cookie'] } });
@@ -229,6 +232,45 @@ export function buildApp({
                 error: { code: 'TIME_ENTRY_NOT_FOUND', message: 'Time entry not found.' },
               })
             );
+          },
+        );
+      }
+      if (quoteRepository) {
+        app.post(
+          '/v1/core-admin/quotes',
+          {
+            preHandler: [
+              authenticate,
+              createAuthorizationGuard(authorizer, {
+                applicationKey: 'core-admin',
+                permissionKey: 'quote.create',
+              }),
+            ],
+          },
+          async (request, reply) => {
+            const parsed = createQuoteSchema.safeParse(request.body);
+            if (!parsed.success)
+              return reply.code(400).send({
+                error: { code: 'INVALID_QUOTE', message: 'Quote input is invalid.' },
+              });
+            try {
+              const quote = await quoteRepository.createForSubject(request.auth!.sub!, parsed.data);
+              return (
+                quote ??
+                reply.code(404).send({
+                  error: { code: 'QUOTE_ACTOR_NOT_FOUND', message: 'Quote actor was not found.' },
+                })
+              );
+            } catch (error) {
+              if (error instanceof QuoteInputError)
+                return reply.code(422).send({
+                  error: {
+                    code: 'UNQUOTABLE_CATALOG',
+                    message: 'Catalog cannot price this quote.',
+                  },
+                });
+              throw error;
+            }
           },
         );
       }
