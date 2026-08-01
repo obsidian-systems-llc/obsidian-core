@@ -21,7 +21,9 @@ describe('GET /health', () => {
   });
 
   it('does not report ready when the database is unavailable', async () => {
-    const unavailableApp = buildApp('postgresql://invalid:invalid@127.0.0.1:1/invalid');
+    const unavailableApp = buildApp({
+      databaseUrl: 'postgresql://invalid:invalid@127.0.0.1:1/invalid',
+    });
     const response = await unavailableApp.inject({ method: 'GET', url: '/ready' });
     expect(response.statusCode).toBe(503);
     expect(response.json()).toEqual({ status: 'unavailable' });

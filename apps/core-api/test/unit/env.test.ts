@@ -7,6 +7,8 @@ describe('environment validation', () => {
     expect(
       loadEnvironment({
         DATABASE_URL: 'postgresql://user:password@localhost:5432/obsidian_core',
+        AUTH0_DOMAIN: 'obsidian-core-dev.us.auth0.com',
+        AUTH0_AUDIENCE: 'https://api.obsidian-systems.tech',
       }),
     ).toMatchObject({ CORE_API_HOST: '127.0.0.1', CORE_API_PORT: 3000 });
   });

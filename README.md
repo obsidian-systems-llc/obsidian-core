@@ -14,6 +14,8 @@ Auth0 is the selected identity provider. Applications will use OIDC Authorizatio
 
 Before enabling login, create separate Auth0 tenants for development, staging, and production; configure each API audience and allowed callback/logout URLs; then set `AUTH0_DOMAIN` and `AUTH0_AUDIENCE` through secret management. Never commit client secrets or management API credentials.
 
+`GET /v1/identity/me` is Core's initial protected API boundary. It requires an `Authorization: Bearer <token>` header, verifies the Auth0 RS256 signature through the tenant JWKS, and validates both issuer and API audience. Missing, malformed, invalid, or wrong-audience tokens receive `401` with the stable `UNAUTHENTICATED` error code. `/health` and `/ready` intentionally remain unauthenticated operational endpoints. This endpoint confirms authentication only; it does not grant an application entitlement or business permission, which are enforced in the next authorization priority.
+
 ### Local development
 
 Prerequisites: Node.js 24 LTS, npm, PostgreSQL 17, and Git. The documented Windows development setup

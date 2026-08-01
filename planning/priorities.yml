@@ -41,12 +41,17 @@ priorities:
       and validated audit-event construction that rejects sensitive metadata.
   - id: CORE-004
     title: Central identity integration
-    status: in_progress
+    status: done
     priority: 4
     dependencies: [CORE-003]
+    acceptance_criteria:
+      - Core validates Auth0 RS256 bearer tokens against the provider JWKS, issuer, and configured audience
+      - Protected routes reject missing, malformed, invalid, and wrong-audience bearer tokens with a stable unauthenticated error
+      - Auth0 tenant configuration is validated at startup without requiring client secrets or management credentials
     implementation_notes: >-
-      Auth0 is the selected OIDC identity provider. Core remains authoritative for profiles,
-      application entitlements, roles, permissions, and resource-level authorization.
+      Auth0 OIDC discovery was verified for the development tenant. Core exposes a token-protected
+      identity boundary and remains authoritative for profiles, application entitlements, roles,
+      permissions, and resource-level authorization.
   - id: CORE-005
     title: Roles, permissions, and application entitlements
     status: blocked

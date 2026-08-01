@@ -7,8 +7,9 @@ const auth0Schema = z.object({
 });
 
 export type Auth0Config = { audience: string; issuer: string };
+type Auth0Environment = { AUTH0_AUDIENCE?: string; AUTH0_DOMAIN?: string };
 
-export function loadAuth0Config(source: NodeJS.ProcessEnv = process.env): Auth0Config {
+export function loadAuth0Config(source: Auth0Environment = process.env): Auth0Config {
   const config = auth0Schema.parse(source);
   return {
     audience: config.AUTH0_AUDIENCE,
