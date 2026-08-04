@@ -18,4 +18,17 @@ describe('environment validation', () => {
   it('rejects missing database configuration at startup', () => {
     expect(() => loadEnvironment({})).toThrow('Invalid environment configuration');
   });
+
+  it('rejects production without HTTPS origins and an Auth0 step-up claim', () => {
+    expect(() =>
+      loadEnvironment({
+        AUTH0_AUDIENCE: 'https://api.example.test',
+        AUTH0_DOMAIN: 'tenant.example.test',
+        DATABASE_URL: 'postgresql://user:pass@localhost:5432/core',
+        FIELD_ENCRYPTION_KEY: 'key',
+        FIELD_ENCRYPTION_KEY_ID: 'key-1',
+        NODE_ENV: 'production',
+      }),
+    ).toThrow('Production requires HTTPS API_ALLOWED_ORIGINS');
+  });
 });

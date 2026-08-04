@@ -27,6 +27,16 @@ const app = buildApp({
   jobRepository: new PostgresJobRepository(environment.DATABASE_URL),
   subscriptionPlanRepository: new PostgresSubscriptionPlanRepository(environment.DATABASE_URL),
   reportingRepository: new PostgresReportingRepository(environment.DATABASE_URL),
+  apiSecurity: {
+    allowedOrigins:
+      environment.API_ALLOWED_ORIGINS?.split(',')
+        .map((origin) => origin.trim())
+        .filter(Boolean) ?? [],
+    sensitiveRateLimitMax: environment.API_SENSITIVE_RATE_LIMIT_MAX,
+    sensitiveRateLimitWindowMs: environment.API_SENSITIVE_RATE_LIMIT_WINDOW_MS,
+    stepUpClaim: environment.AUTH0_STEP_UP_CLAIM,
+    stepUpValue: environment.AUTH0_STEP_UP_VALUE,
+  },
   verifyToken: createAuth0TokenVerifier(loadAuth0Config(environment)),
 });
 async function start(): Promise<void> {

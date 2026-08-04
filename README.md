@@ -16,6 +16,16 @@ Before enabling login, create separate Auth0 tenants for development, staging, a
 
 `GET /v1/identity/me` is Core's initial protected API boundary. It requires an `Authorization: Bearer <token>` header, verifies the Auth0 RS256 signature through the tenant JWKS, and validates both issuer and API audience. Missing, malformed, invalid, or wrong-audience tokens receive `401` with the stable `UNAUTHENTICATED` error code. `/health` and `/ready` intentionally remain unauthenticated operational endpoints.
 
+### API perimeter configuration
+
+Core applies no-sniff, frame-deny, referrer, and cross-origin resource-policy headers to every
+response. Configure browser access with `API_ALLOWED_ORIGINS` as a comma-separated allowlist and
+configure sensitive write protection with `API_SENSITIVE_RATE_LIMIT_MAX` and
+`API_SENSITIVE_RATE_LIMIT_WINDOW_MS`. Production requires HTTPS origins and an Auth0 custom
+step-up claim/value (`AUTH0_STEP_UP_CLAIM`, `AUTH0_STEP_UP_VALUE`); subscription-plan changes reject
+tokens without that claim. The built-in limiter is per-process and suitable for a single Core
+instance only; distributed production deployments require a shared limiter before horizontal scaling.
+
 ### Authorization
 
 Core resolves each Auth0 subject to an active internal user, then requires both an active application

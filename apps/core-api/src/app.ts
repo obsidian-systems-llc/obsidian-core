@@ -21,6 +21,13 @@ import {
 } from './jobs.js';
 import type { ReportingRepository } from './reporting.js';
 import { subscriptionPlanVersionSchema, type SubscriptionPlanRepository } from './subscriptions.js';
+import {
+  hasStepUpAuthentication,
+  isOriginAllowed,
+  isSensitiveRoute,
+  SensitiveRouteRateLimiter,
+  type ApiSecurityConfig,
+} from './security.js';
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -39,6 +46,7 @@ export type BuildAppOptions = {
   jobRepository?: JobRepository;
   subscriptionPlanRepository?: SubscriptionPlanRepository;
   reportingRepository?: ReportingRepository;
+  apiSecurity?: ApiSecurityConfig;
   verifyToken?: TokenVerifier;
 };
 
@@ -53,13 +61,45 @@ export function buildApp({
   jobRepository,
   subscriptionPlanRepository,
   reportingRepository,
+  apiSecurity,
   verifyToken,
 }: BuildAppOptions = {}): FastifyInstance {
   const app = Fastify({ logger: { redact: ['req.headers.authorization', 'req.headers.cookie'] } });
+  const security = apiSecurity;
+  const rateLimiter = security
+    ? new SensitiveRouteRateLimiter(
+        security.sensitiveRateLimitMax,
+        security.sensitiveRateLimitWindowMs,
+      )
+    : undefined;
   app.addHook('onRequest', async (request, reply) => {
     const correlationId = request.headers['x-correlation-id'] ?? randomUUID();
     reply.header('x-correlation-id', correlationId);
     request.log = request.log.child({ correlationId });
+    reply.header('x-content-type-options', 'nosniff');
+    reply.header('x-frame-options', 'DENY');
+    reply.header('referrer-policy', 'no-referrer');
+    reply.header('cross-origin-resource-policy', 'same-origin');
+    if (!security) return;
+    const origin = typeof request.headers.origin === 'string' ? request.headers.origin : undefined;
+    if (origin && !isOriginAllowed(origin, security))
+      return reply
+        .code(403)
+        .send({ error: { code: 'ORIGIN_FORBIDDEN', message: 'Origin is not allowed.' } });
+    if (origin) {
+      reply.header('access-control-allow-origin', origin);
+      reply.header('vary', 'Origin');
+      reply.header('access-control-allow-headers', 'authorization, content-type, x-correlation-id');
+      reply.header('access-control-allow-methods', 'GET, HEAD, POST, OPTIONS');
+    }
+    if (request.method === 'OPTIONS') return reply.code(204).send();
+    if (rateLimiter && isSensitiveRoute(request)) {
+      const key = `${request.ip}:${request.method}:${request.url.split('?')[0]}`;
+      if (!rateLimiter.allow(key))
+        return reply.code(429).send({
+          error: { code: 'RATE_LIMITED', message: 'Too many requests. Try again later.' },
+        });
+    }
   });
   app.get('/health', async () => ({ status: 'ok' }));
   app.get('/ready', async (_request, reply) => {
@@ -382,6 +422,21 @@ export function buildApp({
           {
             preHandler: [
               authenticate,
+              async (request, reply) => {
+                if (
+                  !security ||
+                  !security.stepUpClaim ||
+                  !security.stepUpValue ||
+                  hasStepUpAuthentication(request.auth!, security)
+                )
+                  return;
+                return reply.code(403).send({
+                  error: {
+                    code: 'STEP_UP_REQUIRED',
+                    message: 'Step-up authentication is required.',
+                  },
+                });
+              },
               createAuthorizationGuard(authorizer, {
                 applicationKey: 'executive-panel',
                 permissionKey: 'subscription.plan.manage',

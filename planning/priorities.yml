@@ -277,7 +277,7 @@ priorities:
       not employee-facing or administrative compensation and commission write workflows.
   - id: CORE-028
     title: API perimeter security controls
-    status: proposed
+    status: done
     priority: 27
     dependencies: [CORE-004, CORE-005, CORE-026]
     acceptance_criteria:
