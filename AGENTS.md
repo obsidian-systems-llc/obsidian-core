@@ -247,6 +247,7 @@ Update documentation when changing:
 - Business rules
 - External integrations
 - Operational runbooks
+- API routes, authorization requirements, request inputs, response intent, or error behavior; keep the README API reference complete for every externally callable Core endpoint
 
 Add an ADR for decisions that materially affect architecture, security, data ownership, deployment, or vendor dependence.
 

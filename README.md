@@ -26,6 +26,42 @@ step-up claim/value (`AUTH0_STEP_UP_CLAIM`, `AUTH0_STEP_UP_VALUE`); subscription
 tokens without that claim. The built-in limiter is per-process and suitable for a single Core
 instance only; distributed production deployments require a shared limiter before horizontal scaling.
 
+## API reference
+
+Base URL: the configured Core API host, such as `https://api.obsidian-systems.tech`. All `/v1/*`
+routes require an Auth0 access token in `Authorization: Bearer <token>` unless marked public. Core
+returns `401 UNAUTHENTICATED` for invalid tokens, `403 FORBIDDEN` for missing entitlement or
+permission, and `400` with a stable route-specific `INVALID_*` code for invalid input. Send an
+`X-Correlation-Id` UUID on write requests to connect client, audit, and server logs.
+
+| Method | Route | Required application + permission | Purpose |
+| --- | --- | --- | --- |
+| GET | `/health` | Public | API liveness. |
+| GET | `/ready` | Public | Database readiness. |
+| GET | `/v1/identity/me` | Authenticated | Returns the Auth0 subject recognized by Core. |
+| GET | `/v1/core-admin/authorization/access` | `core-admin` + `authorization.read` | Verifies Core Admin access. |
+| GET | `/v1/core-admin/organization-hierarchy` | `core-admin` + `organization.read` | Returns active organization hierarchy. |
+| GET | `/v1/customer-portal/profile` | `customer-portal` + `customer.profile.read` | Returns the caller's customer profile. |
+| GET | `/v1/employee-portal/profile` | `employee-portal` + `employee.profile.read` | Returns the caller's employee profile and effective assignments. |
+| GET | `/v1/employee-portal/time-entries` | `employee-portal` + `timekeeping.self.manage` | Lists the caller's time entries. |
+| POST | `/v1/employee-portal/time-entries` | `employee-portal` + `timekeeping.self.manage` | Creates an idempotent time entry. |
+| POST | `/v1/employee-portal/time-entries/:id/corrections` | `employee-portal` + `timekeeping.self.manage` | Appends a reasoned time correction. |
+| POST | `/v1/core-admin/quotes` | `core-admin` + `quote.create` | Creates an idempotent catalog-priced quote. |
+| POST | `/v1/core-admin/jobs` | `core-admin` + `job.create` | Creates an idempotent job and appointment. |
+| POST | `/v1/core-admin/jobs/:id/transitions` | `core-admin` + `job.transition` | Appends an allowed workflow transition. |
+| POST | `/v1/executive/subscription-plan-versions` | `executive-panel` + `subscription.plan.manage` | Creates an audited plan version; production requires step-up authentication. |
+| GET | `/v1/executive/overview` | `executive-panel` + `reporting.read` | Latest/previous hierarchy-scoped aggregate comparison. |
+| GET | `/v1/executive/operating-aggregates` | `executive-panel` + `reporting.read` | Lists hierarchy-scoped persisted aggregate rows. |
+| POST | `/v1/core-admin/compensation-assignments` | `core-admin` + `compensation.manage` | Creates an effective-dated compensation assignment. |
+| POST | `/v1/core-admin/commissions` | `core-admin` + `compensation.manage` | Creates an auditable commission entry. |
+| POST | `/v1/core-admin/commissions/:id/events` | `core-admin` + `compensation.manage` | Appends a reasoned commission lifecycle event. |
+| GET | `/v1/employee-portal/earnings-estimate` | `employee-portal` + `earnings.self.read` | Returns estimated and pending commission totals, never finalized payroll. |
+
+Write payloads use JSON. Money values are integer minor units and may be represented as decimal strings
+at the boundary. Creation routes that expose an `idempotencyKey` require a UUID. Applications must
+never call the database directly or reimplement Core authorization, pricing, compensation, payment,
+or subscription rules.
+
 ### Authorization
 
 Core resolves each Auth0 subject to an active internal user, then requires both an active application
