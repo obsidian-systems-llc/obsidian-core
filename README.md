@@ -1146,8 +1146,8 @@ Create these items in `planning/priorities.yml` in this order:
 14. `CORE-014` — Commission engine with `$20/hour` plan and `10%` default commission
 15. `CORE-015` — Store/district/company sales and wage aggregates
 16. `CORE-016` — Executive Panel authentication and overview
-17. `CORE-017` — Employee mobile clock and assigned-job MVP
-18. `CORE-018` — Customer portal MVP
+17. `CORE-017` — Employee mobile clock and assigned-job integration
+18. `CORE-018` — Customer portal integration
 19. `CORE-019` — Public website account and protection enrollment
 20. `CORE-020` — Payroll export integration
 

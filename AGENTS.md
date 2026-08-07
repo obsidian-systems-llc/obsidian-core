@@ -51,6 +51,16 @@ When asked to **Build priority parts**:
 
 Never skip a higher priority because a later item is easier or more interesting.
 
+## Integration completion standard
+
+Treat every CORE priority as a production-grade integration boundary, not a throwaway MVP. Before
+marking it done, implement the complete Core-owned contract that is reasonably determinable from the
+repository: validated inputs, authorization, idempotency where retries are possible, audit events for
+sensitive actions, durable schema/history, documented API routes, failure behavior, and appropriate
+tests. A client UI may be phased independently, but Core must not leave business rules for clients
+to recreate. Record genuinely deferred work as a separate proposed priority rather than calling an
+incomplete integration done.
+
 ## Scope discipline
 
 - Make the smallest coherent change that fully satisfies the selected priority.

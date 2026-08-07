@@ -184,12 +184,12 @@ priorities:
       This is a Core API iteration only. The Vercel-hosted Executive Panel remains a separate client
       that consumes the authenticated overview and aggregate endpoints.
   - id: CORE-017
-    title: Employee mobile clock and assigned-job MVP
+    title: Employee mobile clock and assigned-job integration
     status: blocked
     priority: 17
     dependencies: [CORE-009, CORE-011]
   - id: CORE-018
-    title: Customer portal MVP
+    title: Customer portal integration
     status: blocked
     priority: 18
     dependencies: [CORE-007, CORE-011, CORE-013]
