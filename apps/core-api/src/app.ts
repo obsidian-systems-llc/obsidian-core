@@ -22,6 +22,12 @@ import {
 import type { ReportingRepository } from './reporting.js';
 import { subscriptionPlanVersionSchema, type SubscriptionPlanRepository } from './subscriptions.js';
 import {
+  assignCompensationSchema,
+  commissionEventSchema,
+  createCommissionSchema,
+  type CompensationRepository,
+} from './compensation.js';
+import {
   hasStepUpAuthentication,
   isOriginAllowed,
   isSensitiveRoute,
@@ -46,6 +52,7 @@ export type BuildAppOptions = {
   jobRepository?: JobRepository;
   subscriptionPlanRepository?: SubscriptionPlanRepository;
   reportingRepository?: ReportingRepository;
+  compensationRepository?: CompensationRepository;
   apiSecurity?: ApiSecurityConfig;
   verifyToken?: TokenVerifier;
 };
@@ -61,6 +68,7 @@ export function buildApp({
   jobRepository,
   subscriptionPlanRepository,
   reportingRepository,
+  compensationRepository,
   apiSecurity,
   verifyToken,
 }: BuildAppOptions = {}): FastifyInstance {
@@ -469,6 +477,124 @@ export function buildApp({
               })
             );
           },
+        );
+      }
+      if (compensationRepository) {
+        const compensationRequirement = {
+          applicationKey: 'core-admin',
+          permissionKey: 'compensation.manage',
+        };
+        app.post(
+          '/v1/core-admin/compensation-assignments',
+          {
+            preHandler: [
+              authenticate,
+              createAuthorizationGuard(authorizer, compensationRequirement),
+            ],
+          },
+          async (request, reply) => {
+            const parsed = assignCompensationSchema.safeParse(request.body);
+            if (!parsed.success)
+              return reply.code(400).send({
+                error: {
+                  code: 'INVALID_COMPENSATION_ASSIGNMENT',
+                  message: 'Compensation assignment input is invalid.',
+                },
+              });
+            return (
+              (await compensationRepository.assign(
+                request.auth!.sub!,
+                parsed.data,
+                String(request.headers['x-correlation-id'] ?? randomUUID()),
+              )) ??
+              reply.code(404).send({
+                error: {
+                  code: 'COMPENSATION_ACTOR_NOT_FOUND',
+                  message: 'Compensation actor was not found.',
+                },
+              })
+            );
+          },
+        );
+        app.post(
+          '/v1/core-admin/commissions',
+          {
+            preHandler: [
+              authenticate,
+              createAuthorizationGuard(authorizer, compensationRequirement),
+            ],
+          },
+          async (request, reply) => {
+            const parsed = createCommissionSchema.safeParse(request.body);
+            if (!parsed.success)
+              return reply.code(400).send({
+                error: { code: 'INVALID_COMMISSION', message: 'Commission input is invalid.' },
+              });
+            return (
+              (await compensationRepository.createCommission(
+                request.auth!.sub!,
+                parsed.data,
+                String(request.headers['x-correlation-id'] ?? randomUUID()),
+              )) ??
+              reply.code(404).send({
+                error: {
+                  code: 'COMPENSATION_PLAN_NOT_FOUND',
+                  message: 'Compensation plan was not found.',
+                },
+              })
+            );
+          },
+        );
+        app.post(
+          '/v1/core-admin/commissions/:id/events',
+          {
+            preHandler: [
+              authenticate,
+              createAuthorizationGuard(authorizer, compensationRequirement),
+            ],
+          },
+          async (request, reply) => {
+            const parsed = commissionEventSchema.safeParse(request.body);
+            const id = (request.params as { id: string }).id;
+            if (!parsed.success || !zUuid(id))
+              return reply.code(400).send({
+                error: {
+                  code: 'INVALID_COMMISSION_EVENT',
+                  message: 'Commission event input is invalid.',
+                },
+              });
+            return (
+              (await compensationRepository.addCommissionEvent(
+                request.auth!.sub!,
+                id,
+                parsed.data,
+                String(request.headers['x-correlation-id'] ?? randomUUID()),
+              )) ??
+              reply.code(404).send({
+                error: { code: 'COMMISSION_NOT_FOUND', message: 'Commission was not found.' },
+              })
+            );
+          },
+        );
+        app.get(
+          '/v1/employee-portal/earnings-estimate',
+          {
+            preHandler: [
+              authenticate,
+              createAuthorizationGuard(authorizer, {
+                applicationKey: 'employee-portal',
+                permissionKey: 'earnings.self.read',
+              }),
+            ],
+          },
+          async (request, reply) =>
+            (await compensationRepository.earnings(request.auth!.sub!)) ??
+            reply.code(404).send({
+              error: {
+                code: 'EMPLOYEE_PROFILE_NOT_FOUND',
+                message: 'Employee profile was not found.',
+              },
+            }),
         );
       }
       if (reportingRepository)

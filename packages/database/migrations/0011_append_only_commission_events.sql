@@ -1,0 +1,4 @@
+CREATE TABLE commission_entry_events (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), commission_entry_id uuid NOT NULL REFERENCES commission_entries(id), status text NOT NULL CHECK (status IN ('pending','earned','approved','sent_to_payroll','paid','disputed','adjusted','reversed','cancelled')), reason text, actor_user_id uuid NOT NULL REFERENCES users(id), correlation_id uuid NOT NULL, created_at timestamptz NOT NULL DEFAULT now());
+CREATE INDEX commission_entry_events_entry_created_idx ON commission_entry_events (commission_entry_id, created_at DESC, id DESC);
+CREATE FUNCTION reject_commission_entry_mutation() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'Commission entries are immutable.'; END; $$;
+CREATE TRIGGER commission_entries_immutable BEFORE UPDATE OR DELETE ON commission_entries FOR EACH ROW EXECUTE FUNCTION reject_commission_entry_mutation();

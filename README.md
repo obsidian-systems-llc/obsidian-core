@@ -171,6 +171,12 @@ commission schema plus the integer-based calculation helper. It does not yet pro
 assignment, commission generation or adjustment, employee earnings, or payroll-export workflows;
 those writes must be authorized and audited when CORE-027 implements them.
 
+CORE-027 adds Core-admin compensation assignment and commission APIs plus an employee earnings
+estimate read. Commission entries are immutable: lifecycle changes are append-only commission events
+with an actor, correlation ID, reason, and audit event. Earnings responses report estimated and
+pending commission minor units only; they are not finalized payroll, wages, overtime, taxes, or a
+payroll-provider export.
+
 Core uses effective-dated hourly or salary compensation plans and employee assignments. Commission
 entries snapshot eligible revenue, a configurable basis-point rate, attribution, and lifecycle
 status using integer minor units. The initial configuration is `$20.00/hour` and `10%`, but it is

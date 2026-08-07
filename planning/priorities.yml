@@ -265,7 +265,7 @@ priorities:
       work proceeds until these reliability and security gaps are resolved.
   - id: CORE-027
     title: Compensation assignment and commission lifecycle workflows
-    status: proposed
+    status: done
     priority: 26
     dependencies: [CORE-014, CORE-026]
     acceptance_criteria:

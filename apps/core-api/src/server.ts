@@ -13,6 +13,7 @@ import { PostgresQuoteRepository } from './quotes.js';
 import { PostgresJobRepository } from './jobs.js';
 import { PostgresSubscriptionPlanRepository } from './subscriptions.js';
 import { PostgresReportingRepository } from './reporting.js';
+import { PostgresCompensationRepository } from './compensation.js';
 
 const environment = loadEnvironment();
 const fieldEncryptor = loadFieldEncryptor(environment);
@@ -27,6 +28,7 @@ const app = buildApp({
   jobRepository: new PostgresJobRepository(environment.DATABASE_URL),
   subscriptionPlanRepository: new PostgresSubscriptionPlanRepository(environment.DATABASE_URL),
   reportingRepository: new PostgresReportingRepository(environment.DATABASE_URL),
+  compensationRepository: new PostgresCompensationRepository(environment.DATABASE_URL),
   apiSecurity: {
     allowedOrigins:
       environment.API_ALLOWED_ORIGINS?.split(',')
