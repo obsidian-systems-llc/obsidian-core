@@ -62,6 +62,14 @@ at the boundary. Creation routes that expose an `idempotencyKey` require a UUID.
 never call the database directly or reimplement Core authorization, pricing, compensation, payment,
 or subscription rules.
 
+### Production-readiness scope
+
+Completed CORE priorities are production-grade for their documented API boundaries, not claims that
+every adjacent business workflow is already live. The production-readiness audit records remaining
+end-to-end integrations as CORE-029 through CORE-033: administrative master-data writes, quote
+approval/acceptance, aggregate refresh, Square payment/webhooks, and authorization administration.
+They are explicit prerequisites before relying on those workflows as operational systems of record.
+
 ### Authorization
 
 Core resolves each Auth0 subject to an active internal user, then requires both an active application

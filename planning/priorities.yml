@@ -285,3 +285,44 @@ priorities:
       - Production security headers and allowed origins are configuration-validated and covered by API tests
     implementation_notes: >-
       Created by CORE-026 to turn the repository security baseline into executable API perimeter controls.
+  - id: CORE-029
+    title: Administrative organization, customer, and employee write workflows
+    status: proposed
+    priority: 28
+    dependencies: [CORE-006, CORE-007, CORE-008, CORE-028]
+    acceptance_criteria:
+      - Authorized administrative APIs create, change, deactivate, and audit organization hierarchy, customer, and employee records
+      - Sensitive customer and employee writes preserve encryption, effective dates, idempotency, and resource-level authorization
+      - Every administrative API is documented in the README integration reference and covered by allowed, denied, and real-database tests
+  - id: CORE-030
+    title: Quote approval, customer acceptance, and revision workflows
+    status: proposed
+    priority: 29
+    dependencies: [CORE-010, CORE-028]
+    acceptance_criteria:
+      - Quote revisions, approvals, overrides, customer acceptance evidence, expiry, and cancellation preserve immutable pricing history
+      - Sensitive approvals and overrides require authorization, step-up where configured, and audit evidence
+  - id: CORE-031
+    title: Aggregate refresh and operational reconciliation
+    status: proposed
+    priority: 30
+    dependencies: [CORE-009, CORE-014, CORE-015, CORE-027]
+    acceptance_criteria:
+      - An idempotent Core-owned refresh workflow derives daily aggregates from authoritative operational records
+      - Aggregate values reconcile to documented sources and retain refresh/audit metadata
+  - id: CORE-032
+    title: Square payment and webhook production integration
+    status: proposed
+    priority: 31
+    dependencies: [CORE-012, CORE-028]
+    acceptance_criteria:
+      - Core performs token/reference-based Square payment, refund, invoice, and webhook workflows with idempotency and signature/replay protection
+      - Payment lifecycle state, audit history, and provider references are reconciled without storing card credentials
+  - id: CORE-033
+    title: Authorization administration and access-governance workflows
+    status: proposed
+    priority: 32
+    dependencies: [CORE-005, CORE-028]
+    acceptance_criteria:
+      - Authorized administrators can manage roles, permissions, and entitlements through audited, effective-dated APIs
+      - Role and entitlement changes require step-up authentication where configured and cannot grant unchecked access
