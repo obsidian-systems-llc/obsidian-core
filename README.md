@@ -26,6 +26,19 @@ step-up claim/value (`AUTH0_STEP_UP_CLAIM`, `AUTH0_STEP_UP_VALUE`); subscription
 tokens without that claim. The built-in limiter is per-process and suitable for a single Core
 instance only; distributed production deployments require a shared limiter before horizontal scaling.
 
+### Employee mobile contract
+
+CORE provides the future React Native/Expo employee application with a client-independent,
+Auth0-protected mobile contract. Mobile clock commands contain only an event type, an idempotency
+key, and an optional assigned job ID. Core timestamps the event, stores immutable clock and break
+history, and creates the completed time entry only when the employee clocks out. Retrying a command
+with the same key is safe; an invalid event sequence returns `409 MOBILE_TIME_EVENT_CONFLICT`.
+
+Mobile job reads and workflow transitions are restricted to the caller's active employee profile.
+Mobile location, device fingerprinting, and telemetry collection are intentionally disabled. Route
+planning and maps remain a separate CORE-025 integration. A future employee application must use a
+dedicated Auth0 Native application; no client secrets belong in the application.
+
 ## API reference
 
 Base URL: the configured Core API host, such as `https://api.obsidian-systems.tech`. All `/v1/*`
@@ -46,6 +59,10 @@ permission, and `400` with a stable route-specific `INVALID_*` code for invalid 
 | GET | `/v1/employee-portal/time-entries` | `employee-portal` + `timekeeping.self.manage` | Lists the caller's time entries. |
 | POST | `/v1/employee-portal/time-entries` | `employee-portal` + `timekeeping.self.manage` | Creates an idempotent time entry. |
 | POST | `/v1/employee-portal/time-entries/:id/corrections` | `employee-portal` + `timekeeping.self.manage` | Appends a reasoned time correction. |
+| GET | `/v1/employee-mobile/timekeeping-state` | `employee-mobile` + `timekeeping.self.manage` | Returns only the caller's current mobile clock/break state. |
+| POST | `/v1/employee-mobile/time-events` | `employee-mobile` + `timekeeping.self.manage` | Records an idempotent `clock_in`, `clock_out`, `break_start`, or `break_end` event. |
+| GET | `/v1/employee-mobile/jobs` | `employee-mobile` + `job.self.read` | Lists only jobs assigned to the caller's active employee profile. |
+| POST | `/v1/employee-mobile/jobs/:id/transitions` | `employee-mobile` + `job.self.transition` | Appends an allowed transition for an assigned job only. |
 | POST | `/v1/core-admin/quotes` | `core-admin` + `quote.create` | Creates an idempotent catalog-priced quote. |
 | POST | `/v1/core-admin/jobs` | `core-admin` + `job.create` | Creates an idempotent job and appointment. |
 | POST | `/v1/core-admin/jobs/:id/transitions` | `core-admin` + `job.transition` | Appends an allowed workflow transition. |

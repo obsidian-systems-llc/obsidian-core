@@ -10,6 +10,9 @@ import type { EmployeeRepository } from './employees.js';
 import {
   createTimeCorrectionSchema,
   createTimeEntrySchema,
+  mobileTimeEventSchema,
+  MobileTimeEventError,
+  type MobileTimekeepingRepository,
   type TimekeepingRepository,
 } from './timekeeping.js';
 import { createQuoteSchema, QuoteInputError, type QuoteRepository } from './quotes.js';
@@ -48,6 +51,7 @@ export type BuildAppOptions = {
   customerRepository?: CustomerRepository;
   employeeRepository?: EmployeeRepository;
   timekeepingRepository?: TimekeepingRepository;
+  mobileTimekeepingRepository?: MobileTimekeepingRepository;
   quoteRepository?: QuoteRepository;
   jobRepository?: JobRepository;
   subscriptionPlanRepository?: SubscriptionPlanRepository;
@@ -64,6 +68,7 @@ export function buildApp({
   customerRepository,
   employeeRepository,
   timekeepingRepository,
+  mobileTimekeepingRepository,
   quoteRepository,
   jobRepository,
   subscriptionPlanRepository,
@@ -297,6 +302,69 @@ export function buildApp({
           },
         );
       }
+      if (mobileTimekeepingRepository) {
+        const mobileTimekeepingRequirement = {
+          applicationKey: 'employee-mobile',
+          permissionKey: 'timekeeping.self.manage',
+        };
+        app.get(
+          '/v1/employee-mobile/timekeeping-state',
+          {
+            preHandler: [
+              authenticate,
+              createAuthorizationGuard(authorizer, mobileTimekeepingRequirement),
+            ],
+          },
+          async (request, reply) =>
+            (await mobileTimekeepingRepository.mobileStateForSubject(request.auth!.sub!)) ??
+            reply.code(404).send({
+              error: { code: 'EMPLOYEE_PROFILE_NOT_FOUND', message: 'Employee profile not found.' },
+            }),
+        );
+        app.post(
+          '/v1/employee-mobile/time-events',
+          {
+            preHandler: [
+              authenticate,
+              createAuthorizationGuard(authorizer, mobileTimekeepingRequirement),
+            ],
+          },
+          async (request, reply) => {
+            const parsed = mobileTimeEventSchema.safeParse(request.body);
+            if (!parsed.success)
+              return reply.code(400).send({
+                error: {
+                  code: 'INVALID_MOBILE_TIME_EVENT',
+                  message: 'Mobile time event input is invalid.',
+                },
+              });
+            try {
+              return (
+                (await mobileTimekeepingRepository.recordMobileEvent(
+                  request.auth!.sub!,
+                  parsed.data,
+                  String(request.headers['x-correlation-id'] ?? randomUUID()),
+                )) ??
+                reply.code(404).send({
+                  error: {
+                    code: 'EMPLOYEE_PROFILE_NOT_FOUND',
+                    message: 'Employee profile not found.',
+                  },
+                })
+              );
+            } catch (error) {
+              if (error instanceof MobileTimeEventError)
+                return reply.code(409).send({
+                  error: {
+                    code: 'MOBILE_TIME_EVENT_CONFLICT',
+                    message: 'Mobile time event conflicts with current state.',
+                  },
+                });
+              throw error;
+            }
+          },
+        );
+      }
       if (quoteRepository) {
         app.post(
           '/v1/core-admin/quotes',
@@ -407,6 +475,68 @@ export function buildApp({
               );
               return (
                 job ??
+                reply
+                  .code(404)
+                  .send({ error: { code: 'JOB_NOT_FOUND', message: 'Job not found.' } })
+              );
+            } catch (error) {
+              if (error instanceof JobTransitionError)
+                return reply.code(409).send({
+                  error: {
+                    code: 'INVALID_JOB_TRANSITION',
+                    message: 'Job transition is not allowed.',
+                  },
+                });
+              throw error;
+            }
+          },
+        );
+      }
+      if (jobRepository?.listForAssignedSubject && jobRepository.transitionForAssignedSubject) {
+        const mobileJobRequirement = {
+          applicationKey: 'employee-mobile',
+          permissionKey: 'job.self.read',
+        };
+        app.get(
+          '/v1/employee-mobile/jobs',
+          {
+            preHandler: [authenticate, createAuthorizationGuard(authorizer, mobileJobRequirement)],
+          },
+          async (request, reply) =>
+            (await jobRepository.listForAssignedSubject!(request.auth!.sub!)) ??
+            reply.code(404).send({
+              error: { code: 'EMPLOYEE_PROFILE_NOT_FOUND', message: 'Employee profile not found.' },
+            }),
+        );
+        app.post(
+          '/v1/employee-mobile/jobs/:id/transitions',
+          {
+            preHandler: [
+              authenticate,
+              createAuthorizationGuard(authorizer, {
+                applicationKey: 'employee-mobile',
+                permissionKey: 'job.self.transition',
+              }),
+            ],
+          },
+          async (request, reply) => {
+            const parsed = transitionJobSchema.safeParse(request.body);
+            const id = (request.params as { id: string }).id;
+            if (!parsed.success || !zUuid(id))
+              return reply.code(400).send({
+                error: {
+                  code: 'INVALID_JOB_TRANSITION',
+                  message: 'Job transition input is invalid.',
+                },
+              });
+            try {
+              return (
+                (await jobRepository.transitionForAssignedSubject!(
+                  request.auth!.sub!,
+                  id,
+                  parsed.data,
+                  String(request.headers['x-correlation-id'] ?? randomUUID()),
+                )) ??
                 reply
                   .code(404)
                   .send({ error: { code: 'JOB_NOT_FOUND', message: 'Job not found.' } })

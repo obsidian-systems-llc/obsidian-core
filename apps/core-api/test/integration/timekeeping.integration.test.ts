@@ -55,7 +55,13 @@ describe.skipIf(!databaseUrl)('PostgreSQL timekeeping repository', () => {
         'ALTER TABLE time_entry_corrections DISABLE TRIGGER time_entry_corrections_immutable',
       );
       await client.query('ALTER TABLE time_entries DISABLE TRIGGER time_entries_immutable');
+      await client.query(
+        'ALTER TABLE mobile_time_events DISABLE TRIGGER mobile_time_events_immutable',
+      );
       await client.query('DELETE FROM audit_events WHERE actor_user_id = $1', [userId]);
+      await client.query('DELETE FROM mobile_time_events WHERE employee_profile_id = $1', [
+        profileId,
+      ]);
       await client.query(
         'DELETE FROM time_entry_corrections WHERE time_entry_id IN (SELECT id FROM time_entries WHERE employee_profile_id = $1)',
         [profileId],
@@ -66,6 +72,9 @@ describe.skipIf(!databaseUrl)('PostgreSQL timekeeping repository', () => {
       await client.query('DELETE FROM users WHERE id = $1', [userId]);
     } finally {
       await client.query('ALTER TABLE time_entries ENABLE TRIGGER time_entries_immutable');
+      await client.query(
+        'ALTER TABLE mobile_time_events ENABLE TRIGGER mobile_time_events_immutable',
+      );
       await client.query(
         'ALTER TABLE time_entry_corrections ENABLE TRIGGER time_entry_corrections_immutable',
       );
@@ -106,5 +115,56 @@ describe.skipIf(!databaseUrl)('PostgreSQL timekeeping repository', () => {
         entry!.id,
       ]),
     ).resolves.toMatchObject({ rows: [{ action: 'time_entry.corrected' }] });
+  });
+
+  it('records an append-only, retry-safe mobile clock and break sequence', async () => {
+    const clockIn = { eventType: 'clock_in' as const, idempotencyKey: randomUUID() };
+    await expect(
+      repository.recordMobileEvent(subject, clockIn, randomUUID()),
+    ).resolves.toMatchObject({
+      activeBreakStartedAt: null,
+      clockedInAt: expect.any(Date),
+    });
+    await expect(
+      repository.recordMobileEvent(subject, clockIn, randomUUID()),
+    ).resolves.toMatchObject({
+      clockedInAt: expect.any(Date),
+    });
+    await repository.recordMobileEvent(
+      subject,
+      { eventType: 'break_start', idempotencyKey: randomUUID() },
+      randomUUID(),
+    );
+    await repository.recordMobileEvent(
+      subject,
+      { eventType: 'break_end', idempotencyKey: randomUUID() },
+      randomUUID(),
+    );
+    await expect(
+      repository.recordMobileEvent(
+        subject,
+        { eventType: 'clock_out', idempotencyKey: randomUUID() },
+        randomUUID(),
+      ),
+    ).resolves.toEqual({ activeBreakStartedAt: null, clockedInAt: null });
+    await expect(
+      client.query(
+        `SELECT event_type FROM mobile_time_events WHERE employee_profile_id = $1 ORDER BY occurred_at, id`,
+        [profileId],
+      ),
+    ).resolves.toMatchObject({
+      rows: [
+        { event_type: 'clock_in' },
+        { event_type: 'break_start' },
+        { event_type: 'break_end' },
+        { event_type: 'clock_out' },
+      ],
+    });
+    await expect(
+      client.query(
+        `SELECT action FROM audit_events WHERE actor_user_id = $1 AND action = 'mobile_time.clock_out'`,
+        [userId],
+      ),
+    ).resolves.toMatchObject({ rows: [{ action: 'mobile_time.clock_out' }] });
   });
 });

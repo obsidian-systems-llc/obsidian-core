@@ -185,9 +185,20 @@ priorities:
       that consumes the authenticated overview and aggregate endpoints.
   - id: CORE-017
     title: Employee mobile clock and assigned-job integration
-    status: blocked
+    status: done
     priority: 17
     dependencies: [CORE-009, CORE-011]
+    acceptance_criteria:
+      - Employee-mobile APIs return only the authenticated active employee's assigned jobs, appointment windows, and current workflow status
+      - Mobile clock, break, and job-status commands are idempotent, append-only, server-authorized, and auditable; mobile retries never duplicate a business action
+      - Mobile location collection is disabled by default; Core accepts no GPS data until a separately approved, consented, and retention-controlled location-verification policy exists
+      - The API exposes conflict-safe failure behavior and is covered by allowed, denied, duplicate-request, and real-PostgreSQL tests
+    implementation_notes: >-
+      The future client is React Native with Expo using a dedicated Auth0 Native application and
+      Core's REST API. No client application is required to complete this Core-owned integration.
+      Route planning, navigation, and mapping remain deferred to CORE-025. The initial mobile
+      contract deliberately avoids collecting location data, device fingerprints, or other
+      sensitive telemetry.
   - id: CORE-018
     title: Customer portal integration
     status: blocked

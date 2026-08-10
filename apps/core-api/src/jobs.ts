@@ -19,6 +19,17 @@ const states = [
   'cancelled',
 ] as const;
 type JobStatus = (typeof states)[number];
+const employeeMobileStates = new Set<JobStatus>([
+  'accepted',
+  'en_route',
+  'arrived',
+  'inspection',
+  'quoted',
+  'in_progress',
+  'payment_due',
+  'completed',
+  'cancelled',
+]);
 const transitions: Record<JobStatus, JobStatus[]> = {
   accepted: ['en_route', 'cancelled'],
   approved: ['in_progress', 'cancelled'],
@@ -61,6 +72,13 @@ export type JobRepository = {
   ): Promise<Job | null>;
   transitionForSubject(
     s: string,
+    id: string,
+    i: z.infer<typeof transitionJobSchema>,
+    correlationId: string,
+  ): Promise<Job | null>;
+  listForAssignedSubject?(subject: string): Promise<Job[] | null>;
+  transitionForAssignedSubject?(
+    subject: string,
     id: string,
     i: z.infer<typeof transitionJobSchema>,
     correlationId: string,
@@ -217,9 +235,121 @@ export class PostgresJobRepository implements JobRepository {
       await client.end();
     }
   }
+  async listForAssignedSubject(subject: string): Promise<Job[] | null> {
+    const client = new Client({ connectionString: this.databaseUrl });
+    try {
+      await client.connect();
+      const profileId = await this.employeeProfileId(client, subject);
+      if (!profileId) return null;
+      const result = await client.query<{ id: string }>(
+        `SELECT j.id FROM jobs j JOIN appointments a ON a.job_id = j.id
+         WHERE j.employee_profile_id = $1
+         ORDER BY a.window_start ASC, j.id ASC`,
+        [profileId],
+      );
+      return Promise.all(result.rows.map((row) => this.get(client, row.id))).then((jobs) =>
+        jobs.filter((job): job is Job => job !== null),
+      );
+    } finally {
+      await client.end();
+    }
+  }
+  async transitionForAssignedSubject(
+    subject: string,
+    jobId: string,
+    input: z.infer<typeof transitionJobSchema>,
+    correlationId: string,
+  ): Promise<Job | null> {
+    const client = new Client({ connectionString: this.databaseUrl });
+    try {
+      await client.connect();
+      await client.query('BEGIN');
+      const userId = await this.userId(client, subject);
+      const profileId = await this.employeeProfileId(client, subject);
+      if (!userId || !profileId) {
+        await client.query('ROLLBACK');
+        return null;
+      }
+      const current = await this.get(client, jobId);
+      const assigned = await client.query(
+        'SELECT 1 FROM jobs WHERE id = $1 AND employee_profile_id = $2',
+        [jobId, profileId],
+      );
+      if (!current || !assigned.rows[0]) {
+        await client.query('ROLLBACK');
+        return null;
+      }
+      const existing = await client.query<{ id: string }>(
+        'SELECT id FROM job_transitions WHERE actor_user_id=$1 AND idempotency_key=$2',
+        [userId, input.idempotencyKey],
+      );
+      if (existing.rows[0]) {
+        await client.query('COMMIT');
+        return await this.get(client, jobId);
+      }
+      if (
+        !employeeMobileStates.has(input.toStatus) ||
+        !transitions[current.status].includes(input.toStatus)
+      )
+        throw new JobTransitionError('Transition is not allowed.');
+      await client.query(
+        'INSERT INTO job_transitions (job_id, from_status, to_status, actor_user_id, reason, idempotency_key, correlation_id) VALUES ($1,$2,$3,$4,$5,$6,$7)',
+        [
+          jobId,
+          current.status,
+          input.toStatus,
+          userId,
+          input.reason ?? null,
+          input.idempotencyKey,
+          z.uuid().safeParse(correlationId).success ? correlationId : randomUUID(),
+        ],
+      );
+      const audit = createAuditEvent({
+        action: 'job.transitioned',
+        actorUserId: userId,
+        afterValue: { status: input.toStatus },
+        beforeValue: { status: current.status },
+        correlationId,
+        reason: input.reason ?? null,
+        targetId: jobId,
+        targetType: 'job',
+      });
+      await client.query(
+        `INSERT INTO audit_events (actor_user_id, action, target_type, target_id, correlation_id, reason, before_value, after_value, occurred_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+        [
+          audit.actorUserId,
+          audit.action,
+          audit.targetType,
+          audit.targetId,
+          audit.correlationId,
+          audit.reason,
+          audit.beforeValue,
+          audit.afterValue,
+          audit.occurredAt,
+        ],
+      );
+      await client.query('COMMIT');
+      return await this.get(client, jobId);
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => undefined);
+      throw error;
+    } finally {
+      await client.end();
+    }
+  }
   private async userId(client: Client, subject: string) {
     const r = await client.query<{ id: string }>(
       "SELECT i.user_id id FROM identities i JOIN users u ON u.id=i.user_id WHERE i.provider='auth0' AND i.provider_subject=$1 AND u.status='active' AND u.archived_at IS NULL",
+      [subject],
+    );
+    return r.rows[0]?.id ?? null;
+  }
+  private async employeeProfileId(client: Client, subject: string) {
+    const r = await client.query<{ id: string }>(
+      `SELECT ep.id FROM identities i JOIN employee_profiles ep ON ep.user_id = i.user_id
+       WHERE i.provider = 'auth0' AND i.provider_subject = $1
+         AND ep.employment_status = 'active' AND ep.archived_at IS NULL`,
       [subject],
     );
     return r.rows[0]?.id ?? null;

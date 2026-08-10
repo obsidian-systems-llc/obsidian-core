@@ -17,13 +17,15 @@ import { PostgresCompensationRepository } from './compensation.js';
 
 const environment = loadEnvironment();
 const fieldEncryptor = loadFieldEncryptor(environment);
+const timekeepingRepository = new PostgresTimekeepingRepository(environment.DATABASE_URL);
 const app = buildApp({
   databaseUrl: environment.DATABASE_URL,
   authorizer: new PostgresAuthorizer(environment.DATABASE_URL),
   organizationRepository: new PostgresOrganizationRepository(environment.DATABASE_URL),
   customerRepository: new PostgresCustomerRepository(environment.DATABASE_URL, fieldEncryptor),
   employeeRepository: new PostgresEmployeeRepository(environment.DATABASE_URL, fieldEncryptor),
-  timekeepingRepository: new PostgresTimekeepingRepository(environment.DATABASE_URL),
+  timekeepingRepository,
+  mobileTimekeepingRepository: timekeepingRepository,
   quoteRepository: new PostgresQuoteRepository(environment.DATABASE_URL),
   jobRepository: new PostgresJobRepository(environment.DATABASE_URL),
   subscriptionPlanRepository: new PostgresSubscriptionPlanRepository(environment.DATABASE_URL),
