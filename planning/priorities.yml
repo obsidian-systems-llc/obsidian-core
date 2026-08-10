@@ -337,3 +337,28 @@ priorities:
     acceptance_criteria:
       - Authorized administrators can manage roles, permissions, and entitlements through audited, effective-dated APIs
       - Role and entitlement changes require step-up authentication where configured and cannot grant unchecked access
+  - id: CORE-034
+    title: Versioned API contract and generated-client pipeline
+    status: proposed
+    priority: 33
+    dependencies: [CORE-028]
+    acceptance_criteria:
+      - A machine-readable, versioned contract covers every externally callable Core endpoint, authorization requirement, input, response, and stable error code
+      - Contract tests prevent undocumented route or schema drift and generated client packages are published for Obsidian applications
+      - Breaking changes are versioned deliberately and migration guidance is documented
+    implementation_notes: >-
+      Created by the production-readiness documentation audit. The README is the human integration
+      guide; a validated, generated contract is required to prevent client drift as Core grows.
+  - id: CORE-035
+    title: Production deployment durability and observability
+    status: proposed
+    priority: 34
+    dependencies: [CORE-003, CORE-028]
+    acceptance_criteria:
+      - Deployment runbooks define managed secrets, HTTPS, database backup and restore verification, health monitoring, and safe migration rollout/rollback
+      - Horizontally scaled Core deployments use a shared rate-limit store and preserve correlation-aware redacted logging
+      - Operational alerts and a recovery drill validate readiness, database failure behavior, and migration recovery
+    implementation_notes: >-
+      Created by the production-readiness documentation audit. The current in-process limiter is
+      correct only for a single Core instance; no production deployment or observability stack has
+      been implemented yet.

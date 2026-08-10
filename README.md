@@ -79,12 +79,140 @@ at the boundary. Creation routes that expose an `idempotencyKey` require a UUID.
 never call the database directly or reimplement Core authorization, pricing, compensation, payment,
 or subscription rules.
 
+### API integration contract
+
+All timestamps are ISO-8601 UTC timestamps. IDs and idempotency keys are UUIDs. Monetary values and
+other potentially large integer values are decimal strings in responses and must never be converted
+to JavaScript floating-point values. A caller retries a creation or mobile command only with the
+same `idempotencyKey` and the same logical request. Core returns the prior result for a safe retry.
+
+Every protected route requires an Auth0 access token for the configured Core API audience. Every
+write should include `X-Correlation-Id: <uuid>`; Core generates one when absent and returns it in
+the response. Invalid input returns `400 INVALID_*`, an invalid workflow or clock-state change
+returns `409`, a missing authorized record returns `404`, and rejected catalog pricing returns
+`422 UNQUOTABLE_CATALOG`. Clients must never infer authorization from the visibility of a screen or
+button; `403 FORBIDDEN` is authoritative.
+
+#### Operational and identity routes
+
+- `GET /health` returns `{ "status": "ok" }` and performs no database check.
+- `GET /ready` returns `{ "status": "ready" }` only when Core can reach PostgreSQL; otherwise it
+  returns `503 { "status": "unavailable" }`.
+- `GET /v1/identity/me` returns `{ "subject": "auth0|..." }` for a validated access token. It
+  returns `401 UNAUTHENTICATED` when the bearer token is missing, malformed, expired, incorrectly
+  issued, or for a different audience.
+- `GET /v1/core-admin/authorization/access` returns `{ "status": "authorized" }` only after
+  `core-admin` entitlement plus `authorization.read` permission checks pass.
+- `GET /v1/core-admin/organization-hierarchy` returns the active organization, business-unit,
+  district, store, and department hierarchy ordered by parent relationship. It is read-only;
+  administration writes are CORE-029.
+
+#### Customer and employee profile routes
+
+- `GET /v1/customer-portal/profile` returns the caller's `{ id, value, addresses }`, where
+  `value` and each address `value` are the decrypted, application-authorized profile payload and an
+  address has `{ id, label, value }`. Core resolves access through customer membership, not merely
+  through an Auth0 login. A caller without a linked active profile receives
+  `404 CUSTOMER_PROFILE_NOT_FOUND`.
+- `GET /v1/employee-portal/profile` returns `{ id, value, assignments }`. An assignment has
+  `id`, `storeId`, `departmentId`, `managerEmployeeProfileId`, `effectiveFrom`, and `effectiveTo`.
+  Only active, effective assignments are returned. A caller without an active employee profile
+  receives `404 EMPLOYEE_PROFILE_NOT_FOUND`.
+
+#### Employee timekeeping and mobile routes
+
+- `GET /v1/employee-portal/time-entries` returns the caller's effective entries, each with
+  `{ id, source, startedAt, endedAt, totalSeconds, correctedAt }`. `totalSeconds` excludes any
+  unpaid mobile break time. No other employee's entries are ever returned.
+- `POST /v1/employee-portal/time-entries` accepts
+  `{ startedAt, endedAt, source, idempotencyKey, employeeAssignmentId? }`, where `source` is one
+  of `web`, `mobile`, `manager`, or `import`, and `endedAt` must be after `startedAt`. It creates or
+  returns the idempotent completed entry.
+- `POST /v1/employee-portal/time-entries/:id/corrections` accepts
+  `{ startedAt, endedAt, reason, idempotencyKey }`. It never edits the source entry; it appends a
+  reasoned correction and audit event. Missing or non-owned entries return
+  `404 TIME_ENTRY_NOT_FOUND`.
+- `GET /v1/employee-mobile/timekeeping-state` returns
+  `{ clockedInAt: timestamp|null, activeBreakStartedAt: timestamp|null }` for the caller only.
+- `POST /v1/employee-mobile/time-events` accepts
+  `{ eventType, idempotencyKey, jobId? }`, with event types `clock_in`, `clock_out`, `break_start`,
+  and `break_end`. Core supplies the authoritative event time, validates the current sequence,
+  verifies an optional job is assigned to the caller, records an immutable event and audit record,
+  and creates the completed mobile time entry on `clock_out`. An invalid sequence or a reused key
+  with a different event returns `409 MOBILE_TIME_EVENT_CONFLICT`.
+- `GET /v1/employee-mobile/jobs` returns only jobs assigned to the active caller. Each job has
+  `{ id, status, windowStart, windowEnd }`.
+- `POST /v1/employee-mobile/jobs/:id/transitions` accepts
+  `{ toStatus, reason?, idempotencyKey }`. Core verifies current assignment and the append-only
+  workflow graph. Missing or unassigned jobs return `404 JOB_NOT_FOUND`; invalid transitions return
+  `409 INVALID_JOB_TRANSITION`.
+
+#### Core Administration routes
+
+- `POST /v1/core-admin/quotes` accepts
+  `{ customerProfileId?, idempotencyKey, items: [{ catalogItemKey, quantity }] }`. Core resolves
+  active catalog versions, snapshots them, and returns
+  `{ id, currency, totalAmountMinor, items }`; every returned line includes the catalog version,
+  name, quantity, unit and line minor-unit amounts. It does not accept client-supplied prices.
+- `POST /v1/core-admin/jobs` accepts
+  `{ customerProfileId?, quoteId?, employeeProfileId?, windowStart, windowEnd, idempotencyKey }`
+  and returns `{ id, status, windowStart, windowEnd }`. It creates the appointment and an audited,
+  initially `requested` job.
+- `POST /v1/core-admin/jobs/:id/transitions` accepts the same transition body as the employee-mobile
+  route. Core Admin has a separate `job.transition` permission; transitions are immutable and
+  idempotent.
+- `POST /v1/core-admin/compensation-assignments` accepts
+  `{ employeeProfileId, compensationPlanVersionId, effectiveFrom, effectiveTo? }` and returns the
+  new `{ id }`. Effective dates are retained as history.
+- `POST /v1/core-admin/commissions` accepts
+  `{ employeeProfileId, compensationPlanVersionId, sourceQuoteId?, eligibleRevenueMinor,
+  attributionBasisPoints }` and returns `{ id, amountMinor }`. Core derives the rate from the
+  selected plan version; clients do not supply a commission amount or rate.
+- `POST /v1/core-admin/commissions/:id/events` accepts
+  `{ status, reason }`, where status is `earned`, `approved`, `disputed`, `reversed`, or
+  `cancelled`; it appends an audited lifecycle event and returns `{ id, status }`.
+
+#### Executive routes
+
+- `POST /v1/executive/subscription-plan-versions` accepts
+  `{ planKey, name, currency, amountMinor, cadence, effectiveFrom, providerPlanReference? }` and
+  returns `{ id }`. `cadence` is `monthly` or `annual`; production also requires the configured
+  Auth0 step-up claim. Core keeps each version instead of changing historical subscription terms.
+- `GET /v1/executive/operating-aggregates` returns hierarchy-scoped persisted rows with
+  `{ aggregationDate, scopeType, netSalesMinor }`. This is an aggregate read, not a live accounting
+  calculation.
+- `GET /v1/executive/overview` returns `{ current, previous }`. Each non-null snapshot includes
+  `aggregationDate`, `netSalesMinor`, `collectedRevenueMinor`, `estimatedHourlyWagesMinor`,
+  `estimatedCommissionsMinor`, and `finalizedPayrollMinor`. Estimated and finalized figures are
+  deliberately distinct.
+
+### Environment and deployment contract
+
+| Variable | Required | Current purpose |
+| --- | --- | --- |
+| `DATABASE_URL` | Yes | PostgreSQL connection URL. |
+| `AUTH0_DOMAIN`, `AUTH0_AUDIENCE` | Yes | Auth0 issuer/JWKS discovery and expected API audience. |
+| `FIELD_ENCRYPTION_KEY`, `FIELD_ENCRYPTION_KEY_ID` | Yes | Authenticated field encryption for customer and employee profile payloads. Rotate through a controlled migration, never by changing historical ciphertext in place. |
+| `API_ALLOWED_ORIGINS` | Production | Comma-separated HTTPS browser-origin allowlist. |
+| `API_SENSITIVE_RATE_LIMIT_MAX`, `API_SENSITIVE_RATE_LIMIT_WINDOW_MS` | No | Per-process sensitive-route limiter configuration. A distributed deployment requires a shared limiter before horizontal scaling. |
+| `AUTH0_STEP_UP_CLAIM`, `AUTH0_STEP_UP_VALUE` | Production | Required production step-up authentication configuration. |
+| `CORE_API_HOST`, `CORE_API_PORT`, `NODE_ENV` | No | Runtime host, port, and environment controls. |
+| `BOOTSTRAP_SUPER_ADMIN*` | Controlled bootstrap only | One-time local/controlled super-admin provisioning; never set in normal application runtime. |
+| `SQUARE_*` | Reserved, not active | Future server-only Square configuration. CORE-032 must implement the provider adapter, signature verification, replay protection, and reconciliation before Core uses these values. |
+
+Production deployment must use managed secret storage, HTTPS termination, a backed-up PostgreSQL
+service, a shared rate-limit store when multiple Core instances run, centralized redacted logs, and
+an externally monitored readiness endpoint. Core currently has no automatic production deployment,
+background worker, hosted object storage, webhook receiver, or provider connection; those are
+separate documented priorities rather than hidden assumptions.
+
 ### Production-readiness scope
 
 Completed CORE priorities are production-grade for their documented API boundaries, not claims that
 every adjacent business workflow is already live. The production-readiness audit records remaining
-end-to-end integrations as CORE-029 through CORE-033: administrative master-data writes, quote
-approval/acceptance, aggregate refresh, Square payment/webhooks, and authorization administration.
+end-to-end integrations as CORE-029 through CORE-035: administrative master-data writes, quote
+approval/acceptance, aggregate refresh, Square payment/webhooks, authorization administration,
+machine-readable API contracts, and production deployment durability.
 They are explicit prerequisites before relying on those workflows as operational systems of record.
 
 ### Authorization
