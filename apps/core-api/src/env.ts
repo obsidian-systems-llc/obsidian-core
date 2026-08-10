@@ -4,6 +4,7 @@ const environmentSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   CORE_API_HOST: z.string().min(1).default('127.0.0.1'),
   CORE_API_PORT: z.coerce.number().int().min(1).max(65_535).default(3000),
+  PORT: z.coerce.number().int().min(1).max(65_535).optional(),
   DATABASE_URL: z.string().url().startsWith('postgresql://'),
   AUTH0_DOMAIN: z.string().min(1),
   AUTH0_AUDIENCE: z.string().url(),
@@ -38,5 +39,9 @@ export function loadEnvironment(source: NodeJS.ProcessEnv = process.env): Enviro
     if (!environment.AUTH0_STEP_UP_CLAIM || !environment.AUTH0_STEP_UP_VALUE)
       throw new Error('Production requires AUTH0_STEP_UP_CLAIM and AUTH0_STEP_UP_VALUE.');
   }
-  return environment;
+  return {
+    ...environment,
+    CORE_API_HOST: environment.PORT ? '0.0.0.0' : environment.CORE_API_HOST,
+    CORE_API_PORT: environment.PORT ?? environment.CORE_API_PORT,
+  };
 }

@@ -19,6 +19,19 @@ describe('environment validation', () => {
     expect(() => loadEnvironment({})).toThrow('Invalid environment configuration');
   });
 
+  it('uses a managed-platform port and public listener when PORT is injected', () => {
+    expect(
+      loadEnvironment({
+        DATABASE_URL: 'postgresql://user:password@localhost:5432/obsidian_core',
+        AUTH0_DOMAIN: 'obsidian-core-dev.us.auth0.com',
+        AUTH0_AUDIENCE: 'https://api.obsidian-systems.tech',
+        FIELD_ENCRYPTION_KEY: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=',
+        FIELD_ENCRYPTION_KEY_ID: 'test-key',
+        PORT: '10000',
+      }),
+    ).toMatchObject({ CORE_API_HOST: '0.0.0.0', CORE_API_PORT: 10000 });
+  });
+
   it('rejects production without HTTPS origins and an Auth0 step-up claim', () => {
     expect(() =>
       loadEnvironment({
