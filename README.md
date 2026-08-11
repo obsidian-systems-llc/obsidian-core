@@ -68,6 +68,7 @@ permission, and `400` with a stable route-specific `INVALID_*` code for invalid 
 | DELETE | `/v1/customer-portal/payment-methods/:id` | `customer-portal` + `payment-method.manage` | Disables an unlinked saved Square card. |
 | POST | `/v1/customer-portal/subscriptions/device-care` | `customer-portal` + `subscription.enroll` | Enrolls the caller in the configured Device Care plan using an owned saved card. |
 | POST | `/v1/customer-portal/subscriptions/device-care/cancel` | `customer-portal` + `subscription.cancel` | Schedules cancellation at the Square billing-period boundary. |
+| GET | `/v1/customer-portal/device-care/wallet` | `customer-portal` + `customer.portal.read` | Returns Core-calculated Device Care credit, membership, MAX, and discount state. |
 | GET | `/v1/customer-portal/overview` | `customer-portal` + `customer.portal.read` | Returns the caller's owned portal records, excluding payment data until the portal-payment follow-up. |
 | GET | `/v1/employee-portal/profile` | `employee-portal` + `employee.profile.read` | Returns the caller's employee profile and effective assignments. |
 | GET | `/v1/employee-portal/time-entries` | `employee-portal` + `timekeeping.self.manage` | Lists the caller's time entries. |
@@ -513,9 +514,23 @@ member agreement, repair-credit ledger, benefit entitlements, and audit history.
 - If a MAX member spends credits and drops below `$350.00`, future active monthly payments resume
   credit accrual until the cap and MAX Status are reached again.
 
-The detailed credit ledger, eligibility rules, benefit-redemption limits, household relationship
-model, lapse policy, and repair-price application are scheduled as CORE-036. A future customer UI
-must read Core's available balance and benefits; it must not calculate credits or discounts itself.
+Core now reconciles signed Square `subscription.*` events with the matching Core subscription and
+credits Device Care only on signed, replay-protected `invoice.payment_made` events that reference an
+active mapped Device Care subscription. Each provider invoice can create at most one append-only
+credit entry; the current membership-policy cap limits the credited amount. A payment-link click,
+portal response, generic payment event, or an unsigned webhook can never award credits.
+
+`GET /v1/customer-portal/device-care/wallet` returns integer-minor-unit values only:
+`balanceMinor` (the historical current balance, capped for display), `availableMinor` (zero until the
+configured `$60.00` threshold), `membershipActive`, `usable`, `maxStatus`, and Core-calculated
+discounts in basis points. The customer portal must display these values and must not calculate
+credits, MAX status, or discount eligibility itself.
+
+The ledger/accrual and customer wallet foundation is in place, but CORE-036 remains in progress:
+credit redemption against a repair, immediate-household verification, benefit-use intervals,
+lapse/forfeiture/reinstatement policy, and administrative entitlement workflows require the
+authoritative quote/repair-settlement work in CORE-030. Those flows must not be simulated in a
+customer client.
 
 ### Compensation and commissions
 

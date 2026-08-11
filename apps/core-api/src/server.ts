@@ -22,6 +22,7 @@ import {
   SquarePaymentProvider,
 } from './payments.js';
 import { PostgresDeviceCareRepository, SquareDeviceCareProvider } from './device-care.js';
+import { PostgresDeviceCareWalletRepository } from './device-care-wallet.js';
 
 const environment = loadEnvironment();
 const fieldEncryptor = loadFieldEncryptor(environment);
@@ -72,6 +73,7 @@ const app = buildApp({
   subscriptionPlanRepository: new PostgresSubscriptionPlanRepository(environment.DATABASE_URL),
   reportingRepository: new PostgresReportingRepository(environment.DATABASE_URL),
   compensationRepository: new PostgresCompensationRepository(environment.DATABASE_URL),
+  deviceCareWalletRepository: new PostgresDeviceCareWalletRepository(environment.DATABASE_URL),
   ...(paymentRepository
     ? {
         paymentRepository,

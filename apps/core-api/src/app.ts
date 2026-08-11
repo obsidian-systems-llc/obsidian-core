@@ -62,6 +62,7 @@ import {
   SquareDeviceCareProviderError,
   type DeviceCareRepository,
 } from './device-care.js';
+import type { DeviceCareWallet } from './device-care-wallet.js';
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -85,6 +86,7 @@ export type BuildAppOptions = {
   compensationRepository?: CompensationRepository;
   paymentRepository?: PaymentRepository;
   deviceCareRepository?: DeviceCareRepository;
+  deviceCareWalletRepository?: { forSubject(subject: string): Promise<DeviceCareWallet | null> };
   squareWebhookRepository?: Pick<PaymentRepository, 'processSquareWebhook'>;
   squareWebhooks?: {
     production?: SquareWebhookConfiguration | undefined;
@@ -109,6 +111,7 @@ export function buildApp({
   compensationRepository,
   paymentRepository,
   deviceCareRepository,
+  deviceCareWalletRepository,
   squareWebhookRepository,
   squareWebhooks,
   apiSecurity,
@@ -193,7 +196,11 @@ export function buildApp({
           return reply.code(400).send({
             error: { code: 'INVALID_SQUARE_WEBHOOK', message: 'Webhook payload is invalid.' },
           });
-        const result = await squareWebhookRepository.processSquareWebhook(parsed.data, payload);
+        const result = await squareWebhookRepository.processSquareWebhook(
+          parsed.data,
+          payload,
+          environment,
+        );
         return reply.code(result === 'duplicate' ? 200 : 202).send({ status: result });
       });
     if (squareWebhooks.sandbox) registerSquareWebhook('sandbox', squareWebhooks.sandbox);
@@ -204,6 +211,24 @@ export function buildApp({
     app.get('/v1/identity/me', { preHandler: authenticate }, async (request) => ({
       subject: request.auth?.sub,
     }));
+    if (deviceCareWalletRepository && authorizer)
+      app.get(
+        '/v1/customer-portal/device-care/wallet',
+        {
+          preHandler: [
+            authenticate,
+            createAuthorizationGuard(authorizer, {
+              applicationKey: 'customer-portal',
+              permissionKey: 'customer.portal.read',
+            }),
+          ],
+        },
+        async (request, reply) =>
+          (await deviceCareWalletRepository.forSubject(request.auth!.sub!)) ??
+          reply.code(404).send({
+            error: { code: 'CUSTOMER_PROFILE_NOT_FOUND', message: 'Customer profile not found.' },
+          }),
+      );
     if (customerRepository?.registerForSubject)
       app.post(
         '/v1/customer-portal/registration',

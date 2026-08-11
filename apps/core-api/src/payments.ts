@@ -227,6 +227,26 @@ function refundStatus(status: string): RefundStatus {
   const value = status.toLowerCase();
   return value === 'approved' || value === 'failed' || value === 'pending' ? value : 'refunded';
 }
+function subscriptionStatus(
+  status: string,
+): 'pending' | 'active' | 'past_due' | 'grace' | 'cancelled' {
+  switch (status.toLowerCase()) {
+    case 'active':
+      return 'active';
+    case 'pending':
+      return 'pending';
+    case 'past_due':
+      return 'past_due';
+    case 'grace':
+      return 'grace';
+    case 'canceled':
+    case 'cancelled':
+    case 'deactivated':
+      return 'cancelled';
+    default:
+      return 'pending';
+  }
+}
 
 export class SquarePaymentProvider implements PaymentProvider {
   private readonly apiBaseUrl: string;
@@ -328,6 +348,21 @@ export const squareWebhookEventSchema = z.object({
   data: z.object({
     object: z.object({
       payment: z.object({ id: z.string().min(1), status: z.string().min(1) }).optional(),
+      invoice: z
+        .object({
+          id: z.string().min(1),
+          subscription_id: z.string().min(1).optional(),
+          status: z.string().min(1).optional(),
+        })
+        .optional(),
+      subscription: z
+        .object({
+          id: z.string().min(1),
+          status: z.string().min(1),
+          version: z.number().int().nonnegative().optional(),
+          charged_through_date: z.string().optional(),
+        })
+        .optional(),
     }),
   }),
 });
@@ -347,6 +382,7 @@ export type PaymentRepository = {
   processSquareWebhook(
     event: z.infer<typeof squareWebhookEventSchema>,
     payload: string,
+    environment?: 'sandbox' | 'production',
   ): Promise<'processed' | 'duplicate'>;
 };
 export type PaymentOperation = {
@@ -538,6 +574,7 @@ export class PostgresPaymentRepository implements PaymentRepository {
   async processSquareWebhook(
     event: z.infer<typeof squareWebhookEventSchema>,
     payload: string,
+    environment?: 'sandbox' | 'production',
   ): Promise<'processed' | 'duplicate'> {
     const client = new Client({ connectionString: this.databaseUrl });
     await client.connect();
@@ -573,6 +610,45 @@ export class PostgresPaymentRepository implements PaymentRepository {
             { provider: 'square', eventType: event.type, status: paymentStatus(payment.status) },
           );
       }
+      const subscription = event.data.object.subscription;
+      if (subscription) {
+        const status = subscriptionStatus(subscription.status);
+        const updated = await client.query<{ id: string }>(
+          `UPDATE customer_subscriptions
+           SET status=$1, provider_version=COALESCE($2, provider_version),
+               renewal_at=COALESCE($3::date, renewal_at), updated_at=now(),
+               cancelled_at=CASE WHEN $1='cancelled' THEN COALESCE(cancelled_at,now()) ELSE cancelled_at END
+           WHERE provider='square' AND provider_subscription_reference=$4
+             AND ($5::text IS NULL OR provider_environment=$5)
+           RETURNING id`,
+          [
+            status,
+            subscription.version ?? null,
+            subscription.charged_through_date ?? null,
+            subscription.id,
+            environment ?? null,
+          ],
+        );
+        if (updated.rows[0])
+          await this.audit(
+            client,
+            null,
+            'subscription.webhook_reconciled',
+            updated.rows[0].id,
+            randomUUID(),
+            { provider: 'square', eventType: event.type, status },
+            'customer_subscription',
+          );
+      }
+      const invoice = event.data.object.invoice;
+      if (event.type === 'invoice.payment_made' && invoice?.subscription_id) {
+        await this.accrueDeviceCareCredit(client, {
+          eventId: event.event_id,
+          invoiceId: invoice.id,
+          providerSubscriptionReference: invoice.subscription_id,
+          ...(environment ? { environment } : {}),
+        });
+      }
       await client.query(
         "UPDATE payment_webhook_events SET processed_at=now(), status='processed' WHERE id=$1",
         [stored.rows[0].id],
@@ -590,6 +666,74 @@ export class PostgresPaymentRepository implements PaymentRepository {
       await client.end();
     }
   }
+  private async accrueDeviceCareCredit(
+    client: Client,
+    input: {
+      eventId: string;
+      invoiceId: string;
+      providerSubscriptionReference: string;
+      environment?: 'sandbox' | 'production';
+    },
+  ): Promise<void> {
+    const subscription = await client.query<{
+      id: string;
+      policy_id: string;
+      accrual_minor: string;
+      cap_minor: string;
+    }>(
+      `SELECT cs.id, policy.id AS policy_id, policy.accrual_minor::text, policy.cap_minor::text
+       FROM customer_subscriptions cs
+       JOIN subscription_plan_versions spv ON spv.id=cs.subscription_plan_version_id
+       JOIN subscription_plans sp ON sp.id=spv.subscription_plan_id AND sp.key='device-care'
+       JOIN LATERAL (
+         SELECT id,accrual_minor,cap_minor FROM device_care_membership_policies
+         WHERE effective_from<=now() AND (effective_to IS NULL OR effective_to>now())
+         ORDER BY version_number DESC LIMIT 1
+       ) policy ON true
+       WHERE cs.provider='square' AND cs.provider_subscription_reference=$1
+         AND cs.status='active' AND ($2::text IS NULL OR cs.provider_environment=$2)
+       FOR UPDATE`,
+      [input.providerSubscriptionReference, input.environment ?? null],
+    );
+    const row = subscription.rows[0];
+    if (!row) return;
+    const existing = await client.query(
+      'SELECT 1 FROM device_care_credit_ledger WHERE provider_invoice_reference=$1',
+      [input.invoiceId],
+    );
+    if (existing.rows[0]) return;
+    const total = await client.query<{ balance: string }>(
+      'SELECT COALESCE(SUM(amount_minor),0)::text AS balance FROM device_care_credit_ledger WHERE customer_subscription_id=$1',
+      [row.id],
+    );
+    const remaining = BigInt(row.cap_minor) - BigInt(total.rows[0]?.balance ?? '0');
+    const credit =
+      remaining > 0n
+        ? remaining < BigInt(row.accrual_minor)
+          ? remaining
+          : BigInt(row.accrual_minor)
+        : 0n;
+    if (credit === 0n) return;
+    await client.query(
+      `INSERT INTO device_care_credit_ledger
+       (customer_subscription_id,membership_policy_id,entry_type,amount_minor,provider_invoice_reference,provider_event_reference)
+       VALUES ($1,$2,'accrual',$3,$4,$5)`,
+      [row.id, row.policy_id, credit.toString(), input.invoiceId, input.eventId],
+    );
+    await this.audit(
+      client,
+      null,
+      'device_care.credit_accrued',
+      row.id,
+      randomUUID(),
+      {
+        amountMinor: credit.toString(),
+        provider: 'square',
+        providerInvoiceReference: input.invoiceId,
+      },
+      'customer_subscription',
+    );
+  }
   private async audit(
     client: Client,
     actorUserId: string | null,
@@ -597,11 +741,12 @@ export class PostgresPaymentRepository implements PaymentRepository {
     targetId: string,
     correlationId: string,
     afterValue: Record<string, unknown>,
+    targetType = 'payment_operation',
   ): Promise<void> {
     const event = createAuditEvent({
       actorUserId,
       action,
-      targetType: 'payment_operation',
+      targetType,
       targetId,
       correlationId,
       reason: null,

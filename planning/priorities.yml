@@ -393,7 +393,7 @@ priorities:
       been implemented yet.
   - id: CORE-036
     title: Obsidian Device Care credit ledger and benefit entitlements
-    status: proposed
+    status: in_progress
     priority: 35
     dependencies: [CORE-013, CORE-030, CORE-032]
     acceptance_criteria:
@@ -407,4 +407,7 @@ priorities:
       $60, cap at $350, and MAX Status applies at the cap while active. Member discounts, household
       usage, MAX benefits, and replenishment after credits are spent are documented in README and
       ADR-0021. The exact lapse/forfeiture and reinstatement timeline remains executive-configurable;
-      do not invent or hard-code it.
+      do not invent or hard-code it. Signed Square invoice accrual, replay-safe ledger entries, and
+      the customer wallet read contract are implemented as a safe foundation. Credit redemption,
+      household/device eligibility, benefit-use intervals, lapse policy, and administrative
+      entitlement management remain gated on CORE-030's authoritative repair settlement workflow.

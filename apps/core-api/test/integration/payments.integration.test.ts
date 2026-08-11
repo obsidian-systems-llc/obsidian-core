@@ -3,6 +3,7 @@ import { config } from 'dotenv';
 import { Client } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { PostgresPaymentRepository, type PaymentProvider } from '../../src/payments.js';
+import { PostgresDeviceCareWalletRepository } from '../../src/device-care-wallet.js';
 
 config({ path: new URL('../../../../.env', import.meta.url) });
 const databaseUrl = process.env.DATABASE_URL;
@@ -17,7 +18,10 @@ describe.skipIf(!databaseUrl)('PostgreSQL payment repository', () => {
     refund: async () => ({ providerRefundId: `refund-${userId}`, status: 'refunded' }),
   };
   const repository = new PostgresPaymentRepository(databaseUrl!, provider);
+  const walletRepository = new PostgresDeviceCareWalletRepository(databaseUrl!);
   let paymentId: string;
+  let customerProfileId: string;
+  let subscriptionId: string;
 
   beforeAll(async () => {
     await client.connect();
@@ -31,6 +35,23 @@ describe.skipIf(!databaseUrl)('PostgreSQL payment repository', () => {
     );
   });
   afterAll(async () => {
+    await client.query(
+      "DELETE FROM payment_webhook_events WHERE provider_event_reference IN ('event-payment-test',$1)",
+      [`invoice-payment-${userId}`],
+    );
+    if (subscriptionId)
+      await client.query(
+        'DELETE FROM device_care_credit_ledger WHERE customer_subscription_id=$1',
+        [subscriptionId],
+      );
+    if (subscriptionId)
+      await client.query('DELETE FROM customer_subscriptions WHERE id=$1', [subscriptionId]);
+    if (customerProfileId)
+      await client.query('DELETE FROM customer_profile_memberships WHERE customer_profile_id=$1', [
+        customerProfileId,
+      ]);
+    if (customerProfileId)
+      await client.query('DELETE FROM customer_profiles WHERE id=$1', [customerProfileId]);
     await client.query(
       "DELETE FROM payment_webhook_events WHERE provider_event_reference='event-payment-test'",
     );
@@ -81,5 +102,51 @@ describe.skipIf(!databaseUrl)('PostgreSQL payment repository', () => {
     await expect(repository.processSquareWebhook(event, JSON.stringify(event))).resolves.toBe(
       'duplicate',
     );
+  });
+
+  it('accrues Device Care credits only once from a paid provider invoice', async () => {
+    const profile = await client.query<{ id: string }>(
+      `INSERT INTO customer_profiles (ciphertext,iv,auth_tag,key_id)
+       VALUES ($1,$2,$3,'test') RETURNING id`,
+      [Buffer.from('test'), Buffer.alloc(12), Buffer.alloc(16)],
+    );
+    customerProfileId = profile.rows[0]!.id;
+    await client.query(
+      'INSERT INTO customer_profile_memberships (customer_profile_id,user_id) VALUES ($1,$2)',
+      [customerProfileId, userId],
+    );
+    const subscription = await client.query<{ id: string }>(
+      `INSERT INTO customer_subscriptions
+       (customer_profile_id,subscription_plan_version_id,status,provider,provider_environment,provider_subscription_reference)
+       SELECT $1,spv.id,'active','square','sandbox',$2
+       FROM subscription_plan_versions spv JOIN subscription_plans sp ON sp.id=spv.subscription_plan_id
+       WHERE sp.key='device-care' ORDER BY spv.version_number DESC LIMIT 1 RETURNING id`,
+      [customerProfileId, `square-subscription-${userId}`],
+    );
+    subscriptionId = subscription.rows[0]!.id;
+    const event = {
+      event_id: `invoice-payment-${userId}`,
+      type: 'invoice.payment_made',
+      data: {
+        object: {
+          invoice: {
+            id: `invoice-${userId}`,
+            subscription_id: `square-subscription-${userId}`,
+          },
+        },
+      },
+    };
+    await expect(
+      repository.processSquareWebhook(event, JSON.stringify(event), 'sandbox'),
+    ).resolves.toBe('processed');
+    await expect(
+      repository.processSquareWebhook(event, JSON.stringify(event), 'sandbox'),
+    ).resolves.toBe('duplicate');
+    await expect(walletRepository.forSubject(subject)).resolves.toMatchObject({
+      availableMinor: '0',
+      balanceMinor: '1500',
+      membershipActive: true,
+      usable: false,
+    });
   });
 });
