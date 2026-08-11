@@ -7,8 +7,10 @@ import { checkDatabase } from './health.js';
 import type { OrganizationRepository } from './organizations.js';
 import {
   customerAddressSchema,
+  customerAccountClosureSchema,
   customerDeviceSchema,
   customerPortalPageSchema,
+  customerProfileUpdateSchema,
   customerRegistrationSchema,
   type CustomerRepository,
 } from './customers.js';
@@ -146,7 +148,7 @@ export function buildApp({
       reply.header('access-control-allow-origin', origin);
       reply.header('vary', 'Origin');
       reply.header('access-control-allow-headers', 'authorization, content-type, x-correlation-id');
-      reply.header('access-control-allow-methods', 'GET, HEAD, POST, OPTIONS');
+      reply.header('access-control-allow-methods', 'GET, HEAD, POST, PUT, DELETE, OPTIONS');
     }
     if (request.method === 'OPTIONS') return reply.code(204).send();
     if (rateLimiter && isSensitiveRoute(request)) {
@@ -298,6 +300,83 @@ export function buildApp({
             );
           },
         );
+        if (customerRepository.updateForSubject)
+          app.put(
+            '/v1/customer-portal/profile',
+            {
+              preHandler: [
+                authenticate,
+                createAuthorizationGuard(authorizer, customerWriteRequirement),
+              ],
+            },
+            async (request, reply) => {
+              const parsed = customerProfileUpdateSchema.safeParse(request.body);
+              if (!parsed.success)
+                return reply.code(400).send({
+                  error: {
+                    code: 'INVALID_CUSTOMER_PROFILE_UPDATE',
+                    message: 'Customer profile update input is invalid.',
+                  },
+                });
+              return (
+                (await customerRepository.updateForSubject!(
+                  request.auth!.sub!,
+                  parsed.data,
+                  String(request.headers['x-correlation-id'] ?? randomUUID()),
+                )) ??
+                reply.code(404).send({
+                  error: {
+                    code: 'CUSTOMER_PROFILE_NOT_FOUND',
+                    message: 'Customer profile not found.',
+                  },
+                })
+              );
+            },
+          );
+        if (customerRepository.closeAccountForSubject)
+          app.delete(
+            '/v1/customer-portal/account',
+            {
+              preHandler: [
+                authenticate,
+                createAuthorizationGuard(authorizer, {
+                  applicationKey: 'customer-portal',
+                  permissionKey: 'customer.account.close',
+                }),
+              ],
+            },
+            async (request, reply) => {
+              const parsed = customerAccountClosureSchema.safeParse(request.body);
+              if (!parsed.success)
+                return reply.code(400).send({
+                  error: {
+                    code: 'INVALID_CUSTOMER_ACCOUNT_CLOSURE',
+                    message: 'Account closure confirmation is invalid.',
+                  },
+                });
+              const result = await customerRepository.closeAccountForSubject!(
+                request.auth!.sub!,
+                parsed.data,
+                String(request.headers['x-correlation-id'] ?? randomUUID()),
+              );
+              if (result === 'active_subscription')
+                return reply.code(409).send({
+                  error: {
+                    code: 'ACTIVE_SUBSCRIPTION_REQUIRES_CANCELLATION',
+                    message: 'Cancel active subscriptions before closing the account.',
+                  },
+                });
+              return (
+                result ??
+                reply.code(404).send({
+                  error: {
+                    code: 'CUSTOMER_PROFILE_NOT_FOUND',
+                    message: 'Customer profile not found.',
+                  },
+                })
+              );
+            },
+          );
         if (customerRepository.portalOverviewForSubject)
           app.get(
             '/v1/customer-portal/overview',

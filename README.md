@@ -57,6 +57,8 @@ permission, and `400` with a stable route-specific `INVALID_*` code for invalid 
 | GET | `/v1/core-admin/organization-hierarchy` | `core-admin` + `organization.read` | Returns active organization hierarchy. |
 | GET | `/v1/customer-portal/profile` | `customer-portal` + `customer.profile.read` | Returns the caller's customer profile. |
 | POST | `/v1/customer-portal/registration` | Authenticated Auth0 user | Creates the caller's encrypted Core customer profile and least-privilege portal access. |
+| PUT | `/v1/customer-portal/profile` | `customer-portal` + `customer.profile.write` | Replaces the caller's encrypted Core profile with an idempotent revision. |
+| DELETE | `/v1/customer-portal/account` | `customer-portal` + `customer.account.close` | Closes and archives the caller's Core customer account after explicit confirmation. |
 | POST | `/v1/customer-portal/addresses` | `customer-portal` + `customer.profile.write` | Adds an encrypted address owned by the caller. |
 | POST | `/v1/customer-portal/devices` | `customer-portal` + `customer.profile.write` | Adds an encrypted device owned by the caller. |
 | POST | `/v1/customer-portal/repair-requests` | `customer-portal` + `repair-request.create` | Creates an idempotent, customer-owned requested repair job. |
@@ -138,6 +140,18 @@ button; `403 FORBIDDEN` is authoritative.
   before returning the existing profile; a portal never needs an Auth0 role, permission, or scope
   claim for customer self-service. Invalid input returns `400 INVALID_CUSTOMER_REGISTRATION`; an
   email already linked to a different Core identity returns `409 CUSTOMER_EMAIL_ALREADY_LINKED`.
+- `PUT /v1/customer-portal/profile` accepts `{ profile, idempotencyKey }`. `profile` is a complete,
+  string-only replacement field map; Core encrypts it, retains an encrypted idempotent revision,
+  returns the updated owned profile, and audits only changed field names. It cannot change the Core
+  account email or Auth0 identity. Invalid input returns `400 INVALID_CUSTOMER_PROFILE_UPDATE`; an
+  absent or closed profile returns `404 CUSTOMER_PROFILE_NOT_FOUND`.
+- `DELETE /v1/customer-portal/account` accepts `{ confirmation: "CLOSE_MY_ACCOUNT",
+  idempotencyKey, reason? }`. Core archives the profile, addresses, and devices; deactivates Core's
+  saved-payment-method records and customer-portal entitlement; and records a safe audit event. It
+  preserves encrypted revisions and operational/audit history rather than deleting financial or
+  repair evidence. Closing is blocked with `409 ACTIVE_SUBSCRIPTION_REQUIRES_CANCELLATION` while a
+  Device Care subscription is active, pending, past due, or in grace. Auth0 login identity deletion
+  is intentionally outside this route because Core does not hold Auth0 Management API credentials.
 - `POST /v1/customer-portal/addresses` accepts `{ label?, value, idempotencyKey }`; `value` is an
   encrypted string-only address map. `POST /v1/customer-portal/devices` accepts
   `{ value, idempotencyKey }` and encrypts its string-only device map. Both return the created (or

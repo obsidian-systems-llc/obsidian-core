@@ -55,6 +55,13 @@ describe.skipIf(!databaseUrl)('PostgreSQL customer repository', () => {
     );
   });
   afterAll(async () => {
+    await client.query('DELETE FROM audit_events WHERE actor_user_id = $1', [userId]);
+    await client.query('DELETE FROM customer_account_closures WHERE customer_profile_id = $1', [
+      profileId,
+    ]);
+    await client.query('DELETE FROM customer_profile_revisions WHERE customer_profile_id = $1', [
+      profileId,
+    ]);
     await client.query('DELETE FROM customer_devices WHERE customer_profile_id = $1', [profileId]);
     await client.query('DELETE FROM customer_profile_addresses WHERE customer_profile_id = $1', [
       profileId,
@@ -85,5 +92,42 @@ describe.skipIf(!databaseUrl)('PostgreSQL customer repository', () => {
       subscriptions: [],
     });
     await expect(repository.portalOverviewForSubject('auth0|unrelated')).resolves.toBeNull();
+  });
+  it('replaces a customer profile idempotently while preserving an encrypted revision', async () => {
+    const update = {
+      idempotencyKey: randomUUID(),
+      profile: { name: 'Updated Synthetic Customer', phone: '555-0100' },
+    };
+    await expect(repository.updateForSubject(subject, update, randomUUID())).resolves.toMatchObject(
+      {
+        id: profileId,
+        value: update.profile,
+      },
+    );
+    await expect(repository.updateForSubject(subject, update, randomUUID())).resolves.toMatchObject(
+      {
+        value: update.profile,
+      },
+    );
+    await expect(
+      client.query(
+        'SELECT count(*)::int AS count FROM customer_profile_revisions WHERE customer_profile_id=$1',
+        [profileId],
+      ),
+    ).resolves.toMatchObject({ rows: [{ count: 1 }] });
+  });
+  it('archives and deauthorizes a customer account after explicit closure', async () => {
+    const closed = await repository.closeAccountForSubject(
+      subject,
+      { confirmation: 'CLOSE_MY_ACCOUNT', idempotencyKey: randomUUID() },
+      randomUUID(),
+    );
+    expect(closed).toMatchObject({ status: 'closed' });
+    await expect(repository.getForSubject(subject)).resolves.toBeNull();
+    await expect(
+      client.query<{ status: string }>('SELECT status FROM customer_profiles WHERE id=$1', [
+        profileId,
+      ]),
+    ).resolves.toMatchObject({ rows: [{ status: 'archived' }] });
   });
 });

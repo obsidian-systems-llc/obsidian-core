@@ -29,6 +29,16 @@ export type CustomerRepository = {
     subject: string,
     page?: CustomerPortalPage,
   ): Promise<CustomerPortalOverview | null>;
+  updateForSubject?(
+    subject: string,
+    input: CustomerProfileUpdate,
+    correlationId: string,
+  ): Promise<CustomerProfile | null>;
+  closeAccountForSubject?(
+    subject: string,
+    input: CustomerAccountClosureInput,
+    correlationId: string,
+  ): Promise<CustomerAccountClosure | null | 'active_subscription'>;
 };
 const customerValueSchema = z.record(z.string(), z.string().trim().min(1).max(500));
 export const customerRegistrationSchema = z.object({
@@ -37,6 +47,18 @@ export const customerRegistrationSchema = z.object({
   profile: customerValueSchema,
 });
 export type CustomerRegistration = z.infer<typeof customerRegistrationSchema>;
+export const customerProfileUpdateSchema = z.object({
+  idempotencyKey: z.uuid(),
+  profile: customerValueSchema,
+});
+export type CustomerProfileUpdate = z.infer<typeof customerProfileUpdateSchema>;
+export const customerAccountClosureSchema = z.object({
+  confirmation: z.literal('CLOSE_MY_ACCOUNT'),
+  idempotencyKey: z.uuid(),
+  reason: z.string().trim().min(3).max(500).optional(),
+});
+export type CustomerAccountClosureInput = z.infer<typeof customerAccountClosureSchema>;
+export type CustomerAccountClosure = { closedAt: Date; status: 'closed' };
 export const customerAddressSchema = z.object({
   idempotencyKey: z.uuid(),
   label: z.string().trim().min(1).max(100).nullable().optional(),
@@ -84,6 +106,7 @@ export const customerPortalPermissionDefinitions = [
   ['payment-method.manage', 'Manage own saved payment methods'],
   ['subscription.enroll', 'Enroll in available subscriptions'],
   ['subscription.cancel', 'Cancel own subscriptions'],
+  ['customer.account.close', 'Close own customer account'],
 ] as const;
 
 export class PostgresCustomerRepository implements CustomerRepository {
@@ -239,6 +262,176 @@ export class PostgresCustomerRepository implements CustomerRepository {
       );
       await client.query('COMMIT');
       return { id: address.rows[0]!.id, label: input.label ?? null, value: input.value };
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => undefined);
+      throw error;
+    } finally {
+      await client.end();
+    }
+  }
+  async updateForSubject(
+    subject: string,
+    input: CustomerProfileUpdate,
+    correlationId: string,
+  ): Promise<CustomerProfile | null> {
+    const client = new Client({ connectionString: this.databaseUrl });
+    try {
+      await client.connect();
+      await client.query('BEGIN');
+      const owner = await this.owner(client, subject);
+      if (!owner) {
+        await client.query('ROLLBACK');
+        return null;
+      }
+      const existing = await client.query<EncryptedRow>(
+        `SELECT id,ciphertext,iv,auth_tag,key_id,NULL::text AS label FROM customer_profile_revisions
+         WHERE customer_profile_id=$1 AND idempotency_key=$2`,
+        [owner.profileId, input.idempotencyKey],
+      );
+      if (existing.rows[0]) {
+        await client.query('COMMIT');
+        return this.getForSubject(subject);
+      }
+      const current = await client.query<EncryptedRow>(
+        `SELECT id,ciphertext,iv,auth_tag,key_id,NULL::text AS label FROM customer_profiles
+         WHERE id=$1 AND status='active' AND archived_at IS NULL FOR UPDATE`,
+        [owner.profileId],
+      );
+      const currentRow = current.rows[0];
+      if (!currentRow) {
+        await client.query('ROLLBACK');
+        return null;
+      }
+      const beforeValue = this.decrypt(currentRow);
+      const encrypted = this.encryptor.encrypt(input.profile);
+      await client.query(
+        `UPDATE customer_profiles SET ciphertext=$2,iv=$3,auth_tag=$4,key_id=$5,updated_at=now() WHERE id=$1`,
+        [owner.profileId, encrypted.ciphertext, encrypted.iv, encrypted.authTag, encrypted.keyId],
+      );
+      await client.query<EncryptedRow>(
+        `INSERT INTO customer_profile_revisions (customer_profile_id,actor_user_id,ciphertext,iv,auth_tag,key_id,idempotency_key)
+         VALUES ($1,$2,$3,$4,$5,$6,$7)
+         RETURNING id,ciphertext,iv,auth_tag,key_id,NULL::text AS label`,
+        [
+          owner.profileId,
+          owner.userId,
+          encrypted.ciphertext,
+          encrypted.iv,
+          encrypted.authTag,
+          encrypted.keyId,
+          input.idempotencyKey,
+        ],
+      );
+      const changedFields = Array.from(
+        new Set([...Object.keys(beforeValue), ...Object.keys(input.profile)]),
+      )
+        .filter((key) => beforeValue[key] !== input.profile[key])
+        .sort();
+      await this.audit(
+        client,
+        owner.userId,
+        'customer.profile_updated',
+        owner.profileId,
+        correlationId,
+        {
+          changedFields,
+        },
+      );
+      await client.query('COMMIT');
+      return this.getForSubject(subject);
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => undefined);
+      throw error;
+    } finally {
+      await client.end();
+    }
+  }
+  async closeAccountForSubject(
+    subject: string,
+    input: CustomerAccountClosureInput,
+    correlationId: string,
+  ): Promise<CustomerAccountClosure | null | 'active_subscription'> {
+    const client = new Client({ connectionString: this.databaseUrl });
+    try {
+      await client.connect();
+      await client.query('BEGIN');
+      const owner = await this.owner(client, subject);
+      if (!owner) {
+        const closed = await client.query<{ closed_at: Date }>(
+          `SELECT cac.closed_at FROM identities i JOIN customer_profile_memberships cpm ON cpm.user_id=i.user_id
+           JOIN customer_account_closures cac ON cac.customer_profile_id=cpm.customer_profile_id
+           WHERE i.provider='auth0' AND i.provider_subject=$1 ORDER BY cac.closed_at DESC LIMIT 1`,
+          [subject],
+        );
+        await client.query('COMMIT');
+        return closed.rows[0] ? { closedAt: closed.rows[0].closed_at, status: 'closed' } : null;
+      }
+      const existing = await client.query<{ closed_at: Date }>(
+        `SELECT closed_at FROM customer_account_closures WHERE customer_profile_id=$1 AND idempotency_key=$2`,
+        [owner.profileId, input.idempotencyKey],
+      );
+      if (existing.rows[0]) {
+        await client.query('COMMIT');
+        return { closedAt: existing.rows[0].closed_at, status: 'closed' };
+      }
+      const activeSubscriptions = await client.query<{ id: string }>(
+        `SELECT id FROM customer_subscriptions WHERE customer_profile_id=$1
+         AND status IN ('pending','active','past_due','grace') LIMIT 1 FOR UPDATE`,
+        [owner.profileId],
+      );
+      if (activeSubscriptions.rows[0]) {
+        await client.query('ROLLBACK');
+        return 'active_subscription';
+      }
+      const closure = await client.query<{ closed_at: Date }>(
+        `INSERT INTO customer_account_closures (customer_profile_id,actor_user_id,idempotency_key,reason)
+         VALUES ($1,$2,$3,$4) RETURNING closed_at`,
+        [owner.profileId, owner.userId, input.idempotencyKey, input.reason ?? null],
+      );
+      await client.query(
+        `UPDATE customer_profiles SET status='archived',archived_at=now(),updated_at=now() WHERE id=$1`,
+        [owner.profileId],
+      );
+      await client.query(
+        `UPDATE customer_addresses ca SET archived_at=now(),updated_at=now()
+         FROM customer_profile_addresses cpa WHERE cpa.customer_address_id=ca.id AND cpa.customer_profile_id=$1
+         AND cpa.deactivated_at IS NULL`,
+        [owner.profileId],
+      );
+      await client.query(
+        `UPDATE customer_devices SET archived_at=now(),updated_at=now()
+         WHERE customer_profile_id=$1 AND archived_at IS NULL`,
+        [owner.profileId],
+      );
+      await client.query(
+        `UPDATE customer_payment_methods SET status='inactive',is_primary=false,deactivated_at=now(),updated_at=now()
+         WHERE customer_profile_id=$1 AND deactivated_at IS NULL`,
+        [owner.profileId],
+      );
+      await client.query(
+        `UPDATE application_entitlements ae SET deactivated_at=now(),updated_at=now()
+         FROM applications a WHERE ae.application_id=a.id AND ae.user_id=$1 AND a.key='customer-portal'
+         AND ae.deactivated_at IS NULL`,
+        [owner.userId],
+      );
+      await client.query(
+        `UPDATE user_roles ur SET effective_to=now(),updated_at=now()
+         FROM roles r JOIN applications a ON a.id=r.application_id
+         WHERE ur.user_id=$1 AND ur.role_id=r.id AND a.key='customer-portal' AND ur.effective_to IS NULL`,
+        [owner.userId],
+      );
+      await this.audit(
+        client,
+        owner.userId,
+        'customer.account_closed',
+        owner.profileId,
+        correlationId,
+        {
+          reasonProvided: Boolean(input.reason),
+        },
+      );
+      await client.query('COMMIT');
+      return { closedAt: closure.rows[0]!.closed_at, status: 'closed' };
     } catch (error) {
       await client.query('ROLLBACK').catch(() => undefined);
       throw error;
