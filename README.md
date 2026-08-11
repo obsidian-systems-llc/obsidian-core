@@ -446,7 +446,9 @@ never a raw card number, CVV, source token, or buyer-verification token.
 `POST /v1/customer-portal/payment-methods` accepts `{ cardholderName, sourceId,
 verificationToken?, saveCardConsent: true, idempotencyKey }`. `sourceId` and optional
 `verificationToken` must be produced by Square's browser SDK and are forwarded once to Square; they
-are not persisted or logged. It returns `{ id, brand, last4, expMonth, expYear, status }`.
+are not persisted or logged. It returns `{ id, brand, last4, expMonth, expYear, status }`. Square
+rejections return the generic `502 PAYMENT_PROVIDER_UNAVAILABLE`; Core logs only Square's safe
+status, error code, and field for operational diagnosis.
 `POST /v1/customer-portal/subscriptions/device-care` accepts `{ paymentMethodId, idempotencyKey }`,
 requires the caller to own an active saved card, then creates the Square subscription and returns the
 Core agreement `{ id, status, renewalAt, providerSubscriptionReference }`. Invalid bodies return

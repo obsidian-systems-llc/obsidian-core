@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { SquareDeviceCareProvider } from '../../src/device-care.js';
+import type { SquareDeviceCareProviderError } from '../../src/device-care.js';
 
 const square = {
   accessToken: 'token',
@@ -42,5 +43,34 @@ describe('Square Device Care provider', () => {
         idempotencyKey: '11111111-1111-4111-8111-111111111111',
       }),
     ).resolves.toMatchObject({ providerSubscriptionReference: 'subscription-1', status: 'active' });
+  });
+  it('retains only Square-safe rejection metadata for server diagnostics', async () => {
+    const provider = new SquareDeviceCareProvider(square, deviceCare, async () => ({
+      ok: false,
+      status: 400,
+      json: async () => ({
+        errors: [
+          {
+            category: 'INVALID_REQUEST_ERROR',
+            code: 'INVALID_CARD_DATA',
+            detail: 'This must not be retained in the application error.',
+            field: 'source_id',
+          },
+        ],
+      }),
+    }));
+    await expect(
+      provider.saveCard({
+        cardholderName: 'Test Customer',
+        customerReference: 'customer-1',
+        idempotencyKey: '11111111-1111-4111-8111-111111111111',
+        sourceId: 'source-1',
+      }),
+    ).rejects.toMatchObject({
+      errors: [
+        { category: 'INVALID_REQUEST_ERROR', code: 'INVALID_CARD_DATA', field: 'source_id' },
+      ],
+      statusCode: 400,
+    } satisfies Partial<SquareDeviceCareProviderError>);
   });
 });

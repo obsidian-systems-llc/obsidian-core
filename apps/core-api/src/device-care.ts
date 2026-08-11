@@ -89,6 +89,33 @@ const subscriptionResponseSchema = z.object({
 const retrievedSubscriptionSchema = z.object({
   subscription: z.object({ version: z.number().int().nullable().optional() }),
 });
+const squareErrorResponseSchema = z.object({
+  errors: z
+    .array(
+      z.object({
+        category: z.string().min(1).optional(),
+        code: z.string().min(1).optional(),
+        field: z.string().min(1).optional(),
+      }),
+    )
+    .max(20)
+    .optional(),
+});
+type SquareSafeError = {
+  category?: string | undefined;
+  code?: string | undefined;
+  field?: string | undefined;
+};
+
+/** Safe Square error metadata for server logs; it deliberately excludes request and response data. */
+export class SquareDeviceCareProviderError extends Error {
+  constructor(
+    readonly statusCode: number,
+    readonly errors: SquareSafeError[],
+  ) {
+    super(`Square request was not accepted (${statusCode}).`);
+  }
+}
 
 export class SquareDeviceCareProvider implements SquareCardProvider {
   private readonly apiBaseUrl: string;
@@ -245,7 +272,10 @@ export class SquareDeviceCareProvider implements SquareCardProvider {
       ...(body ? { body: JSON.stringify(body) } : {}),
     });
     const result = await response.json();
-    if (!response.ok) throw new Error(`Square request was not accepted (${response.status}).`);
+    if (!response.ok) {
+      const parsed = squareErrorResponseSchema.safeParse(result);
+      throw new SquareDeviceCareProviderError(response.status, parsed.data?.errors ?? []);
+    }
     return result;
   }
 }

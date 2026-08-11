@@ -57,6 +57,7 @@ import {
   enrollDeviceCareSchema,
   paymentMethodMutationSchema,
   savePaymentMethodSchema,
+  SquareDeviceCareProviderError,
   type DeviceCareRepository,
 } from './device-care.js';
 
@@ -432,7 +433,16 @@ export function buildApp({
                   })
                 );
               } catch (error) {
-                request.log.warn({ error }, 'Device Care payment method was rejected.');
+                request.log.warn(
+                  error instanceof SquareDeviceCareProviderError
+                    ? {
+                        providerErrorCodes: error.errors.map((item) => item.code).filter(Boolean),
+                        providerErrorFields: error.errors.map((item) => item.field).filter(Boolean),
+                        providerStatusCode: error.statusCode,
+                      }
+                    : { error },
+                  'Device Care payment method was rejected.',
+                );
                 return reply.code(502).send({
                   error: {
                     code: 'PAYMENT_PROVIDER_UNAVAILABLE',
