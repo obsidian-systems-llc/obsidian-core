@@ -54,7 +54,7 @@ const app = buildApp({
   timekeepingRepository,
   mobileTimekeepingRepository: timekeepingRepository,
   quoteRepository: new PostgresQuoteRepository(environment.DATABASE_URL),
-  jobRepository: new PostgresJobRepository(environment.DATABASE_URL),
+  jobRepository: new PostgresJobRepository(environment.DATABASE_URL, fieldEncryptor),
   subscriptionPlanRepository: new PostgresSubscriptionPlanRepository(environment.DATABASE_URL),
   reportingRepository: new PostgresReportingRepository(environment.DATABASE_URL),
   compensationRepository: new PostgresCompensationRepository(environment.DATABASE_URL),

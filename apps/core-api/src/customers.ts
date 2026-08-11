@@ -1,6 +1,7 @@
 import { Client } from 'pg';
 import { z } from 'zod';
 import type { FieldEncryptor } from './encryption.js';
+import { createAuditEvent } from './audit.js';
 
 export type CustomerProfile = {
   addresses: Array<{ id: string; label: string | null; value: Record<string, string> }>;
@@ -9,11 +10,44 @@ export type CustomerProfile = {
 };
 export type CustomerRepository = {
   getForSubject(subject: string): Promise<CustomerProfile | null>;
+  registerForSubject?(
+    subject: string,
+    input: CustomerRegistration,
+    correlationId: string,
+  ): Promise<CustomerProfile>;
+  addAddressForSubject?(
+    subject: string,
+    input: CustomerAddressInput,
+    correlationId: string,
+  ): Promise<{ id: string; label: string | null; value: Record<string, string> } | null>;
+  addDeviceForSubject?(
+    subject: string,
+    input: CustomerDeviceInput,
+    correlationId: string,
+  ): Promise<{ id: string; status: string; value: Record<string, string> } | null>;
   portalOverviewForSubject?(
     subject: string,
     page?: CustomerPortalPage,
   ): Promise<CustomerPortalOverview | null>;
 };
+const customerValueSchema = z.record(z.string(), z.string().trim().min(1).max(500));
+export const customerRegistrationSchema = z.object({
+  email: z.string().trim().email().max(320),
+  idempotencyKey: z.uuid(),
+  profile: customerValueSchema,
+});
+export type CustomerRegistration = z.infer<typeof customerRegistrationSchema>;
+export const customerAddressSchema = z.object({
+  idempotencyKey: z.uuid(),
+  label: z.string().trim().min(1).max(100).nullable().optional(),
+  value: customerValueSchema,
+});
+export type CustomerAddressInput = z.infer<typeof customerAddressSchema>;
+export const customerDeviceSchema = z.object({
+  idempotencyKey: z.uuid(),
+  value: customerValueSchema,
+});
+export type CustomerDeviceInput = z.infer<typeof customerDeviceSchema>;
 export type CustomerPortalPage = { limit: number; offset: number };
 export const customerPortalPageSchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(50),
@@ -83,6 +117,171 @@ export class PostgresCustomerRepository implements CustomerRepository {
           }),
         })),
       };
+    } finally {
+      await client.end();
+    }
+  }
+  async registerForSubject(
+    subject: string,
+    input: CustomerRegistration,
+    correlationId: string,
+  ): Promise<CustomerProfile> {
+    const client = new Client({ connectionString: this.databaseUrl });
+    try {
+      await client.connect();
+      await client.query('BEGIN');
+      const identity = await client.query<{ user_id: string }>(
+        "SELECT user_id FROM identities WHERE provider='auth0' AND provider_subject=$1 FOR UPDATE",
+        [subject],
+      );
+      if (identity.rows[0]) {
+        await client.query('COMMIT');
+        const existing = await this.getForSubject(subject);
+        if (existing) return existing;
+        throw new Error('IDENTITY_ALREADY_LINKED');
+      }
+      const email = await client.query<{ id: string }>(
+        'SELECT id FROM users WHERE lower(email)=lower($1) FOR UPDATE',
+        [input.email],
+      );
+      if (email.rows[0]) throw new Error('EMAIL_ALREADY_LINKED');
+      const user = await client.query<{ id: string }>(
+        "INSERT INTO users (email,status) VALUES ($1,'active') RETURNING id",
+        [input.email],
+      );
+      const userId = user.rows[0]!.id;
+      await client.query(
+        "INSERT INTO identities (user_id,provider,provider_subject) VALUES ($1,'auth0',$2)",
+        [userId, subject],
+      );
+      const encrypted = this.encryptor.encrypt(input.profile);
+      const profile = await client.query<{ id: string }>(
+        'INSERT INTO customer_profiles (ciphertext,iv,auth_tag,key_id) VALUES ($1,$2,$3,$4) RETURNING id',
+        [encrypted.ciphertext, encrypted.iv, encrypted.authTag, encrypted.keyId],
+      );
+      await client.query(
+        'INSERT INTO customer_profile_memberships (customer_profile_id,user_id) VALUES ($1,$2)',
+        [profile.rows[0]!.id, userId],
+      );
+      await this.ensurePortalAccess(client, userId);
+      await this.audit(client, userId, 'customer.registered', profile.rows[0]!.id, correlationId, {
+        profileFields: Object.keys(input.profile).sort(),
+      });
+      await client.query('COMMIT');
+      return { addresses: [], id: profile.rows[0]!.id, value: input.profile };
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => undefined);
+      throw error;
+    } finally {
+      await client.end();
+    }
+  }
+  async addAddressForSubject(
+    subject: string,
+    input: CustomerAddressInput,
+    correlationId: string,
+  ): Promise<{ id: string; label: string | null; value: Record<string, string> } | null> {
+    const client = new Client({ connectionString: this.databaseUrl });
+    try {
+      await client.connect();
+      await client.query('BEGIN');
+      const owner = await this.owner(client, subject);
+      if (!owner) {
+        await client.query('ROLLBACK');
+        return null;
+      }
+      const existing = await client.query<{
+        id: string;
+        label: string | null;
+        ciphertext: Buffer;
+        iv: Buffer;
+        auth_tag: Buffer;
+        key_id: string;
+      }>(
+        `SELECT ca.id,cpa.label,ca.ciphertext,ca.iv,ca.auth_tag,ca.key_id FROM customer_profile_addresses cpa
+         JOIN customer_addresses ca ON ca.id=cpa.customer_address_id
+         WHERE cpa.customer_profile_id=$1 AND cpa.idempotency_key=$2`,
+        [owner.profileId, input.idempotencyKey],
+      );
+      if (existing.rows[0]) {
+        await client.query('COMMIT');
+        const row = existing.rows[0];
+        return { id: row.id, label: row.label, value: this.decrypt(row) };
+      }
+      const encrypted = this.encryptor.encrypt(input.value);
+      const address = await client.query<{ id: string }>(
+        'INSERT INTO customer_addresses (ciphertext,iv,auth_tag,key_id) VALUES ($1,$2,$3,$4) RETURNING id',
+        [encrypted.ciphertext, encrypted.iv, encrypted.authTag, encrypted.keyId],
+      );
+      await client.query(
+        'INSERT INTO customer_profile_addresses (customer_profile_id,customer_address_id,label,idempotency_key) VALUES ($1,$2,$3,$4)',
+        [owner.profileId, address.rows[0]!.id, input.label ?? null, input.idempotencyKey],
+      );
+      await this.audit(
+        client,
+        owner.userId,
+        'customer.address_added',
+        address.rows[0]!.id,
+        correlationId,
+        { label: input.label ?? null },
+      );
+      await client.query('COMMIT');
+      return { id: address.rows[0]!.id, label: input.label ?? null, value: input.value };
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => undefined);
+      throw error;
+    } finally {
+      await client.end();
+    }
+  }
+  async addDeviceForSubject(
+    subject: string,
+    input: CustomerDeviceInput,
+    correlationId: string,
+  ): Promise<{ id: string; status: string; value: Record<string, string> } | null> {
+    const client = new Client({ connectionString: this.databaseUrl });
+    try {
+      await client.connect();
+      await client.query('BEGIN');
+      const owner = await this.owner(client, subject);
+      if (!owner) {
+        await client.query('ROLLBACK');
+        return null;
+      }
+      const existing = await client.query<EncryptedRow & { status: string }>(
+        'SELECT id,status,ciphertext,iv,auth_tag,key_id,NULL::text AS label FROM customer_devices WHERE customer_profile_id=$1 AND idempotency_key=$2',
+        [owner.profileId, input.idempotencyKey],
+      );
+      if (existing.rows[0]) {
+        await client.query('COMMIT');
+        const row = existing.rows[0];
+        return { id: row.id, status: row.status, value: this.decrypt(row) };
+      }
+      const encrypted = this.encryptor.encrypt(input.value);
+      const device = await client.query<{ id: string }>(
+        'INSERT INTO customer_devices (customer_profile_id,ciphertext,iv,auth_tag,key_id,idempotency_key) VALUES ($1,$2,$3,$4,$5,$6) RETURNING id',
+        [
+          owner.profileId,
+          encrypted.ciphertext,
+          encrypted.iv,
+          encrypted.authTag,
+          encrypted.keyId,
+          input.idempotencyKey,
+        ],
+      );
+      await this.audit(
+        client,
+        owner.userId,
+        'customer.device_added',
+        device.rows[0]!.id,
+        correlationId,
+        { status: 'active' },
+      );
+      await client.query('COMMIT');
+      return { id: device.rows[0]!.id, status: 'active', value: input.value };
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => undefined);
+      throw error;
     } finally {
       await client.end();
     }
@@ -175,5 +374,95 @@ export class PostgresCustomerRepository implements CustomerRepository {
     } finally {
       await client.end();
     }
+  }
+  private decrypt(row: { ciphertext: Buffer; iv: Buffer; auth_tag: Buffer; key_id: string }) {
+    return this.encryptor.decrypt<Record<string, string>>({
+      authTag: row.auth_tag,
+      ciphertext: row.ciphertext,
+      iv: row.iv,
+      keyId: row.key_id,
+    });
+  }
+  private async owner(client: Client, subject: string) {
+    const result = await client.query<{ profile_id: string; user_id: string }>(
+      `SELECT cpm.customer_profile_id AS profile_id,i.user_id FROM identities i
+       JOIN customer_profile_memberships cpm ON cpm.user_id=i.user_id
+       JOIN customer_profiles cp ON cp.id=cpm.customer_profile_id
+       WHERE i.provider='auth0' AND i.provider_subject=$1 AND cp.status='active' AND cp.archived_at IS NULL
+       ORDER BY cpm.created_at LIMIT 1`,
+      [subject],
+    );
+    const row = result.rows[0];
+    return row ? { profileId: row.profile_id, userId: row.user_id } : null;
+  }
+  private async ensurePortalAccess(client: Client, userId: string): Promise<void> {
+    const application = await client.query<{ id: string }>(
+      `INSERT INTO applications (key,name) VALUES ('customer-portal','Obsidian Customer Portal')
+       ON CONFLICT (key) DO UPDATE SET deactivated_at=NULL RETURNING id`,
+    );
+    const applicationId = application.rows[0]!.id;
+    const role = await client.query<{ id: string }>(
+      `INSERT INTO roles (application_id,key,name,deactivated_at) VALUES ($1,'customer-self-service','Customer Self-Service',NULL)
+       ON CONFLICT (application_id,key) DO UPDATE SET deactivated_at=NULL RETURNING id`,
+      [applicationId],
+    );
+    for (const [key, name] of [
+      ['customer.profile.read', 'Read own customer profile'],
+      ['customer.profile.write', 'Manage own customer profile'],
+      ['customer.portal.read', 'Read own customer portal'],
+      ['repair-request.create', 'Create own repair requests'],
+    ]) {
+      const permission = await client.query<{ id: string }>(
+        `INSERT INTO permissions (key,name) VALUES ($1,$2) ON CONFLICT (key) DO UPDATE SET name=EXCLUDED.name RETURNING id`,
+        [key, name],
+      );
+      await client.query(
+        'INSERT INTO role_permissions (role_id,permission_id) VALUES ($1,$2) ON CONFLICT DO NOTHING',
+        [role.rows[0]!.id, permission.rows[0]!.id],
+      );
+    }
+    await client.query(
+      `INSERT INTO user_roles (user_id,role_id) SELECT $1,$2 WHERE NOT EXISTS
+       (SELECT 1 FROM user_roles WHERE user_id=$1 AND role_id=$2 AND organization_id IS NULL AND effective_to IS NULL)`,
+      [userId, role.rows[0]!.id],
+    );
+    await client.query(
+      `INSERT INTO application_entitlements (user_id,application_id) SELECT $1,$2 WHERE NOT EXISTS
+       (SELECT 1 FROM application_entitlements WHERE user_id=$1 AND application_id=$2 AND deactivated_at IS NULL AND effective_to IS NULL)`,
+      [userId, applicationId],
+    );
+  }
+  private async audit(
+    client: Client,
+    actorUserId: string,
+    action: string,
+    targetId: string,
+    correlationId: string,
+    afterValue: Record<string, unknown>,
+  ): Promise<void> {
+    const event = createAuditEvent({
+      actorUserId,
+      action,
+      targetType: 'customer',
+      targetId,
+      correlationId,
+      reason: null,
+      beforeValue: null,
+      afterValue,
+    });
+    await client.query(
+      'INSERT INTO audit_events (actor_user_id,action,target_type,target_id,correlation_id,reason,before_value,after_value,occurred_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)',
+      [
+        event.actorUserId,
+        event.action,
+        event.targetType,
+        event.targetId,
+        event.correlationId,
+        event.reason,
+        event.beforeValue,
+        event.afterValue,
+        event.occurredAt,
+      ],
+    );
   }
 }

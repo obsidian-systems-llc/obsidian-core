@@ -56,6 +56,10 @@ permission, and `400` with a stable route-specific `INVALID_*` code for invalid 
 | GET | `/v1/core-admin/authorization/access` | `core-admin` + `authorization.read` | Verifies Core Admin access. |
 | GET | `/v1/core-admin/organization-hierarchy` | `core-admin` + `organization.read` | Returns active organization hierarchy. |
 | GET | `/v1/customer-portal/profile` | `customer-portal` + `customer.profile.read` | Returns the caller's customer profile. |
+| POST | `/v1/customer-portal/registration` | Authenticated Auth0 user | Creates the caller's encrypted Core customer profile and least-privilege portal access. |
+| POST | `/v1/customer-portal/addresses` | `customer-portal` + `customer.profile.write` | Adds an encrypted address owned by the caller. |
+| POST | `/v1/customer-portal/devices` | `customer-portal` + `customer.profile.write` | Adds an encrypted device owned by the caller. |
+| POST | `/v1/customer-portal/repair-requests` | `customer-portal` + `repair-request.create` | Creates an idempotent, customer-owned requested repair job. |
 | GET | `/v1/customer-portal/overview` | `customer-portal` + `customer.portal.read` | Returns the caller's owned portal records, excluding payment data until the portal-payment follow-up. |
 | GET | `/v1/employee-portal/profile` | `employee-portal` + `employee.profile.read` | Returns the caller's employee profile and effective assignments. |
 | GET | `/v1/employee-portal/time-entries` | `employee-portal` + `timekeeping.self.manage` | Lists the caller's time entries. |
@@ -120,6 +124,23 @@ button; `403 FORBIDDEN` is authoritative.
   address has `{ id, label, value }`. Core resolves access through customer membership, not merely
   through an Auth0 login. A caller without a linked active profile receives
   `404 CUSTOMER_PROFILE_NOT_FOUND`.
+- `POST /v1/customer-portal/registration` accepts `{ email, profile, idempotencyKey }` after a
+  valid Auth0 login. `profile` is a string-only field map encrypted at rest. Core binds the Auth0
+  subject to a new customer profile, grants only the `customer-portal` entitlement and self-service
+  role, and audits the registration without copying profile data into audit records. Invalid input
+  returns `400 INVALID_CUSTOMER_REGISTRATION`; an email or identity already linked to Core returns
+  `409 CUSTOMER_EMAIL_ALREADY_LINKED` or `409 IDENTITY_ALREADY_LINKED`.
+- `POST /v1/customer-portal/addresses` accepts `{ label?, value, idempotencyKey }`; `value` is an
+  encrypted string-only address map. `POST /v1/customer-portal/devices` accepts
+  `{ value, idempotencyKey }` and encrypts its string-only device map. Both return the created (or
+  retried) owned record, audit the safe action metadata, and return `404 CUSTOMER_PROFILE_NOT_FOUND`
+  if the authenticated customer has no active profile.
+- `POST /v1/customer-portal/repair-requests` accepts `{ addressId, deviceId?, description,
+  preferredWindowStart, preferredWindowEnd, idempotencyKey }`. Core verifies ownership of the active
+  address/device, encrypts the repair description, creates a requested job and preferred appointment
+  window, and audits the creation. Invalid input returns `400 INVALID_REPAIR_REQUEST`; a missing or
+  non-owned address/device returns `404 CUSTOMER_RESOURCE_NOT_FOUND`. This route does not schedule,
+  assign, price, or collect payment for the repair.
 - `GET /v1/customer-portal/overview` returns only the caller's profile, decrypted addresses and
   devices, quotes, appointment-backed jobs, and subscription agreements. It returns
   `{ page: { limit, offset, nextOffset } }`; payment methods, invoices, receipts, and payment state
