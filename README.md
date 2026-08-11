@@ -133,9 +133,11 @@ button; `403 FORBIDDEN` is authoritative.
 - `POST /v1/customer-portal/registration` accepts `{ email, profile, idempotencyKey }` after a
   valid Auth0 login. `profile` is a string-only field map encrypted at rest. Core binds the Auth0
   subject to a new customer profile, grants only the `customer-portal` entitlement and self-service
-  role, and audits the registration without copying profile data into audit records. Invalid input
-  returns `400 INVALID_CUSTOMER_REGISTRATION`; an email or identity already linked to Core returns
-  `409 CUSTOMER_EMAIL_ALREADY_LINKED` or `409 IDENTITY_ALREADY_LINKED`.
+  role, and audits the registration without copying profile data into audit records. A safe repeat
+  registration for an already-linked subject reconciles that standard role's current permissions
+  before returning the existing profile; a portal never needs an Auth0 role, permission, or scope
+  claim for customer self-service. Invalid input returns `400 INVALID_CUSTOMER_REGISTRATION`; an
+  email already linked to a different Core identity returns `409 CUSTOMER_EMAIL_ALREADY_LINKED`.
 - `POST /v1/customer-portal/addresses` accepts `{ label?, value, idempotencyKey }`; `value` is an
   encrypted string-only address map. `POST /v1/customer-portal/devices` accepts
   `{ value, idempotencyKey }` and encrypts its string-only device map. Both return the created (or

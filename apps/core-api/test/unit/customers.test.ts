@@ -1,5 +1,6 @@
 import { afterAll, describe, expect, it } from 'vitest';
 import { buildApp } from '../../src/app.js';
+import { customerPortalPermissionDefinitions } from '../../src/customers.js';
 const app = buildApp({
   verifyToken: async () => ({ sub: 'auth0|customer' }),
   authorizer: {
@@ -14,6 +15,11 @@ const app = buildApp({
 });
 afterAll(async () => app.close());
 describe('customer profile boundary', () => {
+  it('defines every permission required by customer payment self-service routes', () => {
+    expect(customerPortalPermissionDefinitions.map(([key]) => key)).toEqual(
+      expect.arrayContaining(['payment-method.read', 'subscription.cancel']),
+    );
+  });
   it('returns only the authenticated customer profile after authorization', async () => {
     const response = await app.inject({
       method: 'GET',

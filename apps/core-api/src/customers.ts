@@ -75,6 +75,17 @@ type EncryptedRow = {
   label: string | null;
 };
 
+export const customerPortalPermissionDefinitions = [
+  ['customer.profile.read', 'Read own customer profile'],
+  ['customer.profile.write', 'Manage own customer profile'],
+  ['customer.portal.read', 'Read own customer portal'],
+  ['repair-request.create', 'Create own repair requests'],
+  ['payment-method.read', 'Read own saved payment methods'],
+  ['payment-method.manage', 'Manage own saved payment methods'],
+  ['subscription.enroll', 'Enroll in available subscriptions'],
+  ['subscription.cancel', 'Cancel own subscriptions'],
+] as const;
+
 export class PostgresCustomerRepository implements CustomerRepository {
   constructor(
     private readonly databaseUrl: string,
@@ -135,6 +146,7 @@ export class PostgresCustomerRepository implements CustomerRepository {
         [subject],
       );
       if (identity.rows[0]) {
+        await this.ensurePortalAccess(client, identity.rows[0].user_id);
         await client.query('COMMIT');
         const existing = await this.getForSubject(subject);
         if (existing) return existing;
@@ -406,14 +418,7 @@ export class PostgresCustomerRepository implements CustomerRepository {
        ON CONFLICT (application_id,key) DO UPDATE SET deactivated_at=NULL RETURNING id`,
       [applicationId],
     );
-    for (const [key, name] of [
-      ['customer.profile.read', 'Read own customer profile'],
-      ['customer.profile.write', 'Manage own customer profile'],
-      ['customer.portal.read', 'Read own customer portal'],
-      ['repair-request.create', 'Create own repair requests'],
-      ['payment-method.manage', 'Manage own saved payment methods'],
-      ['subscription.enroll', 'Enroll in available subscriptions'],
-    ]) {
+    for (const [key, name] of customerPortalPermissionDefinitions) {
       const permission = await client.query<{ id: string }>(
         `INSERT INTO permissions (key,name) VALUES ($1,$2) ON CONFLICT (key) DO UPDATE SET name=EXCLUDED.name RETURNING id`,
         [key, name],
