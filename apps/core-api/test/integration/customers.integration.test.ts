@@ -12,6 +12,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL customer repository', () => {
   const userId = randomUUID();
   const profileId = randomUUID();
   const addressId = randomUUID();
+  const deviceId = randomUUID();
   const client = new Client({ connectionString: databaseUrl });
   const subject = `auth0|customer-${userId}`;
   const encryptor = loadFieldEncryptor({
@@ -23,6 +24,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL customer repository', () => {
     await client.connect();
     const profile = encryptor.encrypt({ name: 'Synthetic Customer' });
     const address = encryptor.encrypt({ city: 'Exampleville', line1: '100 Test Way' });
+    const device = encryptor.encrypt({ serialNumber: 'SYNTHETIC-DEVICE', type: 'phone' });
     await client.query('INSERT INTO users (id, email) VALUES ($1, $2)', [
       userId,
       `customer-${userId}@example.invalid`,
@@ -47,8 +49,13 @@ describe.skipIf(!databaseUrl)('PostgreSQL customer repository', () => {
       "INSERT INTO customer_profile_addresses (customer_profile_id, customer_address_id, label) VALUES ($1, $2, 'home')",
       [profileId, addressId],
     );
+    await client.query(
+      'INSERT INTO customer_devices (id, customer_profile_id, ciphertext, iv, auth_tag, key_id) VALUES ($1,$2,$3,$4,$5,$6)',
+      [deviceId, profileId, device.ciphertext, device.iv, device.authTag, device.keyId],
+    );
   });
   afterAll(async () => {
+    await client.query('DELETE FROM customer_devices WHERE customer_profile_id = $1', [profileId]);
     await client.query('DELETE FROM customer_profile_addresses WHERE customer_profile_id = $1', [
       profileId,
     ]);
@@ -68,5 +75,15 @@ describe.skipIf(!databaseUrl)('PostgreSQL customer repository', () => {
       addresses: [{ id: addressId, label: 'home', value: { city: 'Exampleville' } }],
     });
     await expect(repository.getForSubject('auth0|unknown')).resolves.toBeNull();
+  });
+  it('returns an encrypted device only through the owning customer portal overview', async () => {
+    await expect(repository.portalOverviewForSubject(subject)).resolves.toMatchObject({
+      id: profileId,
+      devices: [{ id: deviceId, status: 'active', value: { type: 'phone' } }],
+      jobs: [],
+      quotes: [],
+      subscriptions: [],
+    });
+    await expect(repository.portalOverviewForSubject('auth0|unrelated')).resolves.toBeNull();
   });
 });

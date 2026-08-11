@@ -14,10 +14,37 @@ import { PostgresJobRepository } from './jobs.js';
 import { PostgresSubscriptionPlanRepository } from './subscriptions.js';
 import { PostgresReportingRepository } from './reporting.js';
 import { PostgresCompensationRepository } from './compensation.js';
+import {
+  loadPaymentProcessorConfiguration,
+  loadSquareWebhookConfiguration,
+  PostgresPaymentRepository,
+  SquarePaymentProvider,
+} from './payments.js';
 
 const environment = loadEnvironment();
 const fieldEncryptor = loadFieldEncryptor(environment);
 const timekeepingRepository = new PostgresTimekeepingRepository(environment.DATABASE_URL);
+const paymentConfiguration = environment.PAYMENTS_ENABLED
+  ? loadPaymentProcessorConfiguration(process.env)
+  : undefined;
+if (paymentConfiguration?.processor === 'worldpay')
+  throw new Error(
+    'Worldpay/Commerce360 payment processing is disabled pending provider verification.',
+  );
+const paymentRepository = paymentConfiguration
+  ? new PostgresPaymentRepository(
+      environment.DATABASE_URL,
+      new SquarePaymentProvider(paymentConfiguration.configuration),
+    )
+  : undefined;
+const squareWebhooks = {
+  sandbox: loadSquareWebhookConfiguration('sandbox', process.env),
+  production: loadSquareWebhookConfiguration('production', process.env),
+};
+const squareWebhookRepository =
+  squareWebhooks.sandbox || squareWebhooks.production
+    ? new PostgresPaymentRepository(environment.DATABASE_URL)
+    : undefined;
 const app = buildApp({
   databaseUrl: environment.DATABASE_URL,
   authorizer: new PostgresAuthorizer(environment.DATABASE_URL),
@@ -31,6 +58,18 @@ const app = buildApp({
   subscriptionPlanRepository: new PostgresSubscriptionPlanRepository(environment.DATABASE_URL),
   reportingRepository: new PostgresReportingRepository(environment.DATABASE_URL),
   compensationRepository: new PostgresCompensationRepository(environment.DATABASE_URL),
+  ...(paymentRepository
+    ? {
+        paymentRepository,
+        squareWebhooks,
+      }
+    : {}),
+  ...(squareWebhookRepository
+    ? {
+        squareWebhookRepository,
+        squareWebhooks,
+      }
+    : {}),
   apiSecurity: {
     allowedOrigins:
       environment.API_ALLOWED_ORIGINS?.split(',')

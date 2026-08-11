@@ -266,10 +266,14 @@ Add an ADR for decisions that materially affect architecture, security, data own
 When an implementation iteration is complete:
 
 1. Update `README.md` with the implemented behavior, setup, operational, or validation changes.
-2. Run the applicable required validation checks.
-3. Review Git status and stage only the completed iteration; do not include unrelated or unfinished work.
-4. Commit with a conventional commit message containing the applicable priority ID.
-5. Push the commit to the configured GitHub remote.
+2. Complete a documentation audit before committing: compare executable routes and integrations with
+   the README, record every new or changed endpoint and its authorization, request, response, and
+   failure behavior, and expand the implemented-features documentation for the completed CORE
+   integration.
+3. Run the applicable required validation checks.
+4. Review Git status and stage only the completed iteration; do not include unrelated or unfinished work.
+5. Commit with a conventional commit message containing the applicable priority ID.
+6. Push the commit to the configured GitHub remote.
 
 Do not commit or push unfinished work merely to satisfy this process. If a check is blocked, document the
 blocker and keep the relevant priority in progress.

@@ -41,8 +41,9 @@ dedicated Auth0 Native application; no client secrets belong in the application.
 
 ## API reference
 
-Base URL: the configured Core API host, such as `https://api.obsidian-systems.tech`. All `/v1/*`
-routes require an Auth0 access token in `Authorization: Bearer <token>` unless marked public. Core
+Production base URL: `https://api.obsidian-systems.tech`. Local development uses the configured
+`CORE_API_HOST` and `CORE_API_PORT`. All `/v1/*` routes require an Auth0 access token in
+`Authorization: Bearer <token>` unless marked public. Core
 returns `401 UNAUTHENTICATED` for invalid tokens, `403 FORBIDDEN` for missing entitlement or
 permission, and `400` with a stable route-specific `INVALID_*` code for invalid input. Send an
 `X-Correlation-Id` UUID on write requests to connect client, audit, and server logs.
@@ -55,6 +56,7 @@ permission, and `400` with a stable route-specific `INVALID_*` code for invalid 
 | GET | `/v1/core-admin/authorization/access` | `core-admin` + `authorization.read` | Verifies Core Admin access. |
 | GET | `/v1/core-admin/organization-hierarchy` | `core-admin` + `organization.read` | Returns active organization hierarchy. |
 | GET | `/v1/customer-portal/profile` | `customer-portal` + `customer.profile.read` | Returns the caller's customer profile. |
+| GET | `/v1/customer-portal/overview` | `customer-portal` + `customer.portal.read` | Returns the caller's owned portal records, excluding payment data until the portal-payment follow-up. |
 | GET | `/v1/employee-portal/profile` | `employee-portal` + `employee.profile.read` | Returns the caller's employee profile and effective assignments. |
 | GET | `/v1/employee-portal/time-entries` | `employee-portal` + `timekeeping.self.manage` | Lists the caller's time entries. |
 | POST | `/v1/employee-portal/time-entries` | `employee-portal` + `timekeeping.self.manage` | Creates an idempotent time entry. |
@@ -72,6 +74,10 @@ permission, and `400` with a stable route-specific `INVALID_*` code for invalid 
 | POST | `/v1/core-admin/compensation-assignments` | `core-admin` + `compensation.manage` | Creates an effective-dated compensation assignment. |
 | POST | `/v1/core-admin/commissions` | `core-admin` + `compensation.manage` | Creates an auditable commission entry. |
 | POST | `/v1/core-admin/commissions/:id/events` | `core-admin` + `compensation.manage` | Appends a reasoned commission lifecycle event. |
+| POST | `/v1/core-admin/payments` | `core-admin` + `payment.manage` | Creates or returns an idempotent token/reference-based payment. |
+| POST | `/v1/core-admin/payments/:id/refunds` | `core-admin` + `payment.manage` | Creates or returns an idempotent full or partial refund. |
+| POST | `/v1/webhooks/square/sandbox` | Public, signed Square sandbox webhook | Verifies, replay-protects, and records Square sandbox payment lifecycle notifications. |
+| POST | `/v1/webhooks/square/production` | Public, signed Square production webhook | Verifies, replay-protects, and records Square production payment lifecycle notifications. |
 | GET | `/v1/employee-portal/earnings-estimate` | `employee-portal` + `earnings.self.read` | Returns estimated and pending commission totals, never finalized payroll. |
 
 Write payloads use JSON. Money values are integer minor units and may be represented as decimal strings
@@ -114,6 +120,10 @@ button; `403 FORBIDDEN` is authoritative.
   address has `{ id, label, value }`. Core resolves access through customer membership, not merely
   through an Auth0 login. A caller without a linked active profile receives
   `404 CUSTOMER_PROFILE_NOT_FOUND`.
+- `GET /v1/customer-portal/overview` returns only the caller's profile, decrypted addresses and
+  devices, quotes, appointment-backed jobs, and subscription agreements. It returns
+  `{ page: { limit, offset, nextOffset } }`; payment methods, invoices, receipts, and payment state
+  are deliberately omitted until the CORE-018 payment follow-up.
 - `GET /v1/employee-portal/profile` returns `{ id, value, assignments }`. An assignment has
   `id`, `storeId`, `departmentId`, `managerEmployeeProfileId`, `effectiveFrom`, and `effectiveTo`.
   Only active, effective assignments are returned. A caller without an active employee profile
@@ -171,6 +181,28 @@ button; `403 FORBIDDEN` is authoritative.
 - `POST /v1/core-admin/commissions/:id/events` accepts
   `{ status, reason }`, where status is `earned`, `approved`, `disputed`, `reversed`, or
   `cancelled`; it appends an audited lifecycle event and returns `{ id, status }`.
+- `POST /v1/core-admin/payments` accepts `{ amountMinor, currency, idempotencyKey,
+  paymentMethodReference }`. `amountMinor` is a decimal string, and `paymentMethodReference` is
+  a Square-generated token or card-on-file reference; Core never persists it. Core returns
+  `{ id, amountMinor, currency, providerPaymentReference, status }`, audits the action, and returns
+  the original operation for a duplicate idempotency key. Provider failures return
+  `502 PAYMENT_PROVIDER_UNAVAILABLE`.
+- `POST /v1/core-admin/payments/:id/refunds` accepts `{ amountMinor, idempotencyKey, reason }`.
+  It returns `{ id, amountMinor, providerRefundReference, status }`, preserves the refund ledger,
+  and rejects a request exceeding the original or remaining payment balance with
+  `422 REFUND_AMOUNT_EXCEEDS_PAYMENT`.
+- `POST /v1/webhooks/square/sandbox` and `/v1/webhooks/square/production` are intentionally
+  unauthenticated because Square calls them. Each accepts only a valid
+  `x-square-hmacsha256-signature` for that environment's configured exact notification URL and raw
+  JSON payload. Core persists each provider event ID before processing, so a replay returns
+  `{ status: "duplicate" }` without another state mutation. Invalid signatures return
+  `403 INVALID_WEBHOOK_SIGNATURE`; malformed signed events return `400 INVALID_SQUARE_WEBHOOK`.
+  While the custom domain is pending, configure Square with
+  `https://obsidian-core-2eat.onrender.com/v1/webhooks/square/sandbox` for the sandbox subscription
+  and `https://obsidian-core-2eat.onrender.com/v1/webhooks/square/production` for production. Do
+  not reuse one listener for both Square environments. After the custom domain is verified, update
+  both the Square subscription and its matching `SQUARE_*_WEBHOOK_NOTIFICATION_URL` to the exact
+  equivalent `https://api.obsidian-systems.tech/...` URL before testing again.
 
 #### Executive routes
 
@@ -197,14 +229,38 @@ button; `403 FORBIDDEN` is authoritative.
 | `API_SENSITIVE_RATE_LIMIT_MAX`, `API_SENSITIVE_RATE_LIMIT_WINDOW_MS` | No | Per-process sensitive-route limiter configuration. A distributed deployment requires a shared limiter before horizontal scaling. |
 | `AUTH0_STEP_UP_CLAIM`, `AUTH0_STEP_UP_VALUE` | Production | Required production step-up authentication configuration. |
 | `CORE_API_HOST`, `CORE_API_PORT`, `NODE_ENV` | No | Runtime host, port, and environment controls. |
+| `PORT` | Managed-platform runtime | When injected by a platform such as Render, Core binds to this port on `0.0.0.0`; local development continues to use `CORE_API_HOST` and `CORE_API_PORT`. |
 | `BOOTSTRAP_SUPER_ADMIN*` | Controlled bootstrap only | One-time local/controlled super-admin provisioning; never set in normal application runtime. |
-| `SQUARE_*` | Reserved, not active | Future server-only Square configuration. CORE-032 must implement the provider adapter, signature verification, replay protection, and reconciliation before Core uses these values. |
+| `PAYMENTS_ENABLED` | No, default `false` | Explicit safety gate. Set `true` only after selected-provider credentials, public webhook subscription, and sandbox verification are complete. |
+| `PAYMENT_PROCESSOR` | No | Payment-provider selector: `square`, `worldpay`, or `commerce360`. `commerce360` is normalized to the Access Worldpay adapter configuration. Default: `square`. |
+| `SQUARE_*` | Required when `PAYMENTS_ENABLED=true` and Square is selected | Server-only access token, application/location IDs, API version, exact webhook notification URL, and webhook signature key. |
+| `WORLDPAY_*` | Reserved, disabled | Commerce360/Access Worldpay configuration; processing is deliberately blocked pending provider-issued values and verification. |
 
 Production deployment must use managed secret storage, HTTPS termination, a backed-up PostgreSQL
 service, a shared rate-limit store when multiple Core instances run, centralized redacted logs, and
 an externally monitored readiness endpoint. Core currently has no automatic production deployment,
 background worker, hosted object storage, webhook receiver, or provider connection; those are
 separate documented priorities rather than hidden assumptions.
+
+### Interchangeable payment-provider configuration
+
+Core owns a provider-neutral payment interface. Set `PAYMENT_PROCESSOR=square` for Square or set
+`PAYMENT_PROCESSOR=worldpay` or `PAYMENT_PROCESSOR=commerce360` for the Access Worldpay path used
+by Commerce360. The latter two values are intentionally equivalent; internally they select the
+`worldpay` adapter. This selector validates the chosen adapter configuration and rejects production
+provider modes unless `NODE_ENV=production`.
+
+For Square, populate the existing sandbox or production application, location, and access-token
+variables, including the matching `SQUARE_*_WEBHOOK_NOTIFICATION_URL` and
+`SQUARE_*_WEBHOOK_SIGNATURE_KEY`. Do not set `PAYMENTS_ENABLED=true` until Square has accepted the
+public HTTPS subscription URL and a signed sandbox event test succeeds. For Commerce360/Worldpay, populate `WORLDPAY_USERNAME`, `WORLDPAY_PASSWORD`, optional
+`WORLDPAY_BASE_URL`, `WORLDPAY_ENVIRONMENT`, `WORLDPAY_API_VERSION`, and the planned HTTPS
+`WORLDPAY_WEBHOOK_NOTIFICATION_URL`. Worldpay supplies credentials through its onboarding process;
+the integration must use a trusted HTTPS webhook endpoint. No raw card details, CVVs, or provider
+credentials reach a GUI or are committed to the repository. The runtime selector is configured now,
+Worldpay processing remains disabled until its provider contract, credentials, event types, signing
+scheme, and sandbox/production behavior are verified. Changing `PAYMENT_PROCESSOR` alone never
+activates it.
 
 ### Production-readiness scope
 
@@ -320,13 +376,15 @@ provider adapter after route-stop and dispatch policies are defined.
 
 ### Square configuration placeholders
 
-`.env.example` contains separate sandbox and production placeholders for the future server-side Square
+`.env.example` contains separate sandbox and production placeholders for the server-side Square
 adapter: access token, application ID, location ID, webhook signature key, notification URL, and API
 version. `SQUARE_ENVIRONMENT` selects the active mode. Development and test deployments must select
 `sandbox`; the future adapter will reject production mode unless `NODE_ENV=production`. Keep all values
 in environment-specific secret management. Never expose access tokens or webhook signature keys to any
-GUI. CORE-012 adds only configuration validation and a provider-neutral contract; processor calls
-and webhook mutation remain deferred.
+GUI. CORE-032 implements payment and refund calls, an append-only operational ledger, signed webhook
+verification, provider-event replay protection, and payment-state audit history. It does not yet
+implement invoices, saved-payment-method lifecycle, Square Catalog plan synchronization, or
+automated recurring billing; those remain CORE-018/021/022 follow-up work.
 
 ### Payment-provider adapter contract
 
@@ -334,10 +392,12 @@ CORE-012 verifies Square's documented sandbox, payment, subscription, invoice, i
 webhook-signature capabilities and defines a provider-neutral Core payment contract. It accepts
 only provider payment-method references and integer minor-unit amounts—never raw card data. The
 configuration loader selects sandbox or production credentials without exposing them to any GUI and
-rejects production Square mode unless `NODE_ENV=production`. This is a capability spike only: it
-does not make Square API calls, accept webhooks, or mutate payment state. Future webhook handling
-must validate Square's HMAC-SHA256 header against the subscription signature key, exact notification
-URL, and raw request body before any processing.
+rejects production Square mode unless `NODE_ENV=production`. CORE-032 implements the active Square
+adapter behind that contract. A payment method reference is used only in the outbound request and is
+never stored; Core persists provider payment/refund references, integer minor-unit amounts, statuses,
+idempotency keys, and safe audit metadata. The webhook handler validates Square's HMAC-SHA256 header
+using the subscription signature key, exact notification URL, and raw request body before it writes
+its replay ledger or changes payment state.
 
 ### Subscription plans
 
@@ -348,10 +408,38 @@ recurring-billing priorities.
 
 Subscription plans and their effective-dated versions use integer minor-unit prices, cadence, and
 optional provider references. Customer subscriptions preserve the selected plan version and safe
-provider subscription reference—never card credentials. The initial configurable Device Protection
-default is `$15.00` monthly. Future plan versions are restricted to the `executive-panel`
+provider subscription reference—never card credentials. The initial configurable **Obsidian Device
+Care** default is `$15.00` monthly. Future plan versions are restricted to the `executive-panel`
 entitlement and `subscription.plan.manage` permission, so Executive users can change pricing or
 cadence without rewriting existing agreements.
+
+### Obsidian Device Care policy
+
+Device Care is a Core-owned membership program, not a Square payment-link feature. Square may
+collect a temporary enrollment payment, but Core must reconcile that provider subscription into the
+member agreement, repair-credit ledger, benefit entitlements, and audit history.
+
+- Each active `$15.00` monthly payment accrues Repair Credits. Credits are usable once the member's
+  balance reaches `$60.00`, are capped at `$350.00`, and use integer minor units.
+- An active member who does not use Repair Credits on a repair receives `10%` off eligible repairs
+  and repair parts, plus `15%` off eligible accessories and other eligible inventory excluding parts.
+- Credits may be applied to eligible devices owned by the member's immediate household. Core must
+  require explicit, auditable household membership and device ownership before an application.
+- The membership must remain active to retain credits. Any lapse, grace period, forfeiture trigger,
+  reinstatement rule, and restoration behavior must be versioned executive policy; Core must never
+  silently delete a credit balance.
+- At the `$350.00` cap, a member receives MAX Status while the membership remains active. Further
+  monthly payments maintain—not exceed—the cap. MAX benefits are priority service when practical,
+  free diagnostics, one free cleaning/detailing entitlement every three months, `20%` eligible
+  accessory discount, complimentary minor cleaning services, free screen-protector installation
+  with protector purchase, loaner-device priority when available, and a `90`-day workmanship
+  warranty rather than the standard `60` days.
+- If a MAX member spends credits and drops below `$350.00`, future active monthly payments resume
+  credit accrual until the cap and MAX Status are reached again.
+
+The detailed credit ledger, eligibility rules, benefit-redemption limits, household relationship
+model, lapse policy, and repair-price application are scheduled as CORE-036. A future customer UI
+must read Core's available balance and benefits; it must not calculate credits or discounts itself.
 
 ### Compensation and commissions
 

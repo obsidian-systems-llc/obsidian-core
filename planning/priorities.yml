@@ -204,6 +204,18 @@ priorities:
     status: blocked
     priority: 18
     dependencies: [CORE-007, CORE-011, CORE-013]
+    acceptance_criteria:
+      - Customer-portal APIs return only the authenticated customer's profile, shared addresses, devices, quotes, jobs, appointments, and subscription agreements through membership-scoped reads
+      - Customer device, portal-read, and subscription-view records preserve ownership history, application-layer encryption where data is sensitive, authorization, pagination, audit requirements, and stable failure behavior
+      - Payment-method references, invoices, payment collection, and payment-status finalization remain Core-owned and are exposed to the portal only after CORE-032 implements the signed Square lifecycle; no client-side processor integration is permitted
+      - Every portal route is documented in the README and covered by allowed, denied, ownership-isolation, pagination, and real-PostgreSQL tests
+    implementation_notes: >-
+      The future portal is a Next.js application on Vercel using its own Auth0 application. Core
+      owns the customer contract independently of that UI. This priority can implement all
+      non-payment portal records and reads now; its payment-specific acceptance boundary is
+      intentionally held open until CORE-032 rather than being represented by an unsafe placeholder.
+      Resume CORE-018 immediately after CORE-032 to add customer payment-method references,
+      invoices, receipts, payment status, and the final portal payment contract.
   - id: CORE-019
     title: Public website account and protection enrollment
     status: blocked
@@ -323,12 +335,20 @@ priorities:
       - Aggregate values reconcile to documented sources and retain refresh/audit metadata
   - id: CORE-032
     title: Square payment and webhook production integration
-    status: proposed
+    status: in_progress
     priority: 31
     dependencies: [CORE-012, CORE-028]
     acceptance_criteria:
       - Core performs token/reference-based Square payment, refund, invoice, and webhook workflows with idempotency and signature/replay protection
       - Payment lifecycle state, audit history, and provider references are reconciled without storing card credentials
+    implementation_notes: >-
+      Square payment, refund, signed webhook, replay-ledger, safe-reference, and audit foundations
+      are implemented. Square invoice workflows and recurring subscription synchronization require
+      verified Square Catalog/Invoice provisioning and are tracked by CORE-021 and CORE-022. The
+      Worldpay/Commerce360 configuration remains selectable through PAYMENT_PROCESSOR but is
+      intentionally disabled until provider-issued credentials, signed-webhook details, and sandbox
+      verification are available. After CORE-032 is done, return to CORE-018 and review CORE-019,
+      CORE-021, and CORE-022 for their provider-dependent finalization work.
   - id: CORE-033
     title: Authorization administration and access-governance workflows
     status: proposed
@@ -347,6 +367,15 @@ priorities:
       - Contract tests prevent undocumented route or schema drift and generated client packages are published for Obsidian applications
       - Breaking changes are versioned deliberately and migration guidance is documented
     implementation_notes: >-
+      After CORE-032 is complete, return to CORE-018 to finalize the customer-portal payment
+      integrations. Before closing CORE-032, review every blocked or proposed payment-dependent
+      CORE priority (including CORE-019, CORE-021, and CORE-022), update its dependencies and
+      acceptance criteria for the verified provider capabilities, and resume it rather than leaving
+      payment behavior to a client application.
+      Square is the active implementation target because its configuration is available locally.
+      Keep the Worldpay/Commerce360 adapter selectable through PAYMENT_PROCESSOR but disabled from
+      live processing until provider-issued credentials, webhook onboarding, and sandbox/production
+      verification are complete.
       Created by the production-readiness documentation audit. The README is the human integration
       guide; a validated, generated contract is required to prevent client drift as Core grows.
   - id: CORE-035
@@ -362,3 +391,20 @@ priorities:
       Created by the production-readiness documentation audit. The current in-process limiter is
       correct only for a single Core instance; no production deployment or observability stack has
       been implemented yet.
+  - id: CORE-036
+    title: Obsidian Device Care credit ledger and benefit entitlements
+    status: proposed
+    priority: 35
+    dependencies: [CORE-013, CORE-030, CORE-032]
+    acceptance_criteria:
+      - Active Device Care payments create idempotent, append-only Repair Credit ledger entries in integer minor units; the available balance becomes usable at $60 and never exceeds the configured $350 cap
+      - Core derives and authorizes MAX Status and all configured benefit entitlements, including three-month cleaning intervals and the 90-day workmanship warranty, from a versioned membership policy rather than client logic
+      - Credit application requires verified active membership, eligible repair/device, auditable immediate-household relationship, and traceable reversal/adjustment behavior
+      - Lapse, grace, forfeiture, and reinstatement behavior is configurable, authorized, auditable, and never deletes historical credit records
+      - Customer and administrative APIs expose only Core-calculated balances, eligibility, and benefit-redemption state with pagination, authorization, audit coverage, and documented contracts
+    implementation_notes: >-
+      Authoritative business policy: $15/month Device Care accrues Repair Credits; credits unlock at
+      $60, cap at $350, and MAX Status applies at the cap while active. Member discounts, household
+      usage, MAX benefits, and replenishment after credits are spent are documented in README and
+      ADR-0021. The exact lapse/forfeiture and reinstatement timeline remains executive-configurable;
+      do not invent or hard-code it.

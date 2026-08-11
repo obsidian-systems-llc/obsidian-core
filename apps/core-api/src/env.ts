@@ -20,6 +20,10 @@ const environmentSchema = z.object({
     .default(60_000),
   AUTH0_STEP_UP_CLAIM: z.string().min(1).optional(),
   AUTH0_STEP_UP_VALUE: z.string().min(1).optional(),
+  PAYMENTS_ENABLED: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((value) => value === 'true'),
 });
 
 export type Environment = z.infer<typeof environmentSchema>;

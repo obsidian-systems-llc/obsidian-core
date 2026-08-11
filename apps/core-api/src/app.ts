@@ -5,7 +5,7 @@ import { createAuthenticationGuard, type TokenVerifier } from './authentication.
 import { createAuthorizationGuard, type Authorizer } from './authorization.js';
 import { checkDatabase } from './health.js';
 import type { OrganizationRepository } from './organizations.js';
-import type { CustomerRepository } from './customers.js';
+import { customerPortalPageSchema, type CustomerRepository } from './customers.js';
 import type { EmployeeRepository } from './employees.js';
 import {
   createTimeCorrectionSchema,
@@ -37,10 +37,20 @@ import {
   SensitiveRouteRateLimiter,
   type ApiSecurityConfig,
 } from './security.js';
+import {
+  type PaymentRepository,
+  PaymentProviderError,
+  paymentRequestSchema,
+  refundRequestSchema,
+  type SquareWebhookConfiguration,
+  squareWebhookEventSchema,
+  verifySquareWebhookSignature,
+} from './payments.js';
 
 declare module 'fastify' {
   interface FastifyRequest {
     auth?: JWTPayload;
+    rawBody?: string;
   }
 }
 
@@ -57,6 +67,12 @@ export type BuildAppOptions = {
   subscriptionPlanRepository?: SubscriptionPlanRepository;
   reportingRepository?: ReportingRepository;
   compensationRepository?: CompensationRepository;
+  paymentRepository?: PaymentRepository;
+  squareWebhookRepository?: Pick<PaymentRepository, 'processSquareWebhook'>;
+  squareWebhooks?: {
+    production?: SquareWebhookConfiguration | undefined;
+    sandbox?: SquareWebhookConfiguration | undefined;
+  };
   apiSecurity?: ApiSecurityConfig;
   verifyToken?: TokenVerifier;
 };
@@ -74,10 +90,21 @@ export function buildApp({
   subscriptionPlanRepository,
   reportingRepository,
   compensationRepository,
+  paymentRepository,
+  squareWebhookRepository,
+  squareWebhooks,
   apiSecurity,
   verifyToken,
 }: BuildAppOptions = {}): FastifyInstance {
   const app = Fastify({ logger: { redact: ['req.headers.authorization', 'req.headers.cookie'] } });
+  app.addContentTypeParser('application/json', { parseAs: 'string' }, (request, body, done) => {
+    request.rawBody = body.toString();
+    try {
+      done(null, JSON.parse(request.rawBody));
+    } catch {
+      done(new Error('Invalid JSON body.'));
+    }
+  });
   const security = apiSecurity;
   const rateLimiter = security
     ? new SensitiveRouteRateLimiter(
@@ -120,6 +147,40 @@ export function buildApp({
       return reply.code(503).send({ status: 'unavailable' });
     return { status: 'ready' };
   });
+  if (squareWebhookRepository && squareWebhooks) {
+    const registerSquareWebhook = (
+      environment: 'sandbox' | 'production',
+      squareWebhook: SquareWebhookConfiguration,
+    ) =>
+      app.post(`/v1/webhooks/square/${environment}`, async (request, reply) => {
+        const signature = request.headers['x-square-hmacsha256-signature'];
+        const payload = request.rawBody;
+        if (typeof signature !== 'string' || !payload)
+          return reply.code(403).send({
+            error: { code: 'INVALID_WEBHOOK_SIGNATURE', message: 'Webhook signature is invalid.' },
+          });
+        if (
+          !verifySquareWebhookSignature({
+            notificationUrl: squareWebhook.notificationUrl,
+            payload,
+            signature,
+            signatureKey: squareWebhook.signatureKey,
+          })
+        )
+          return reply.code(403).send({
+            error: { code: 'INVALID_WEBHOOK_SIGNATURE', message: 'Webhook signature is invalid.' },
+          });
+        const parsed = squareWebhookEventSchema.safeParse(request.body);
+        if (!parsed.success)
+          return reply.code(400).send({
+            error: { code: 'INVALID_SQUARE_WEBHOOK', message: 'Webhook payload is invalid.' },
+          });
+        const result = await squareWebhookRepository.processSquareWebhook(parsed.data, payload);
+        return reply.code(result === 'duplicate' ? 200 : 202).send({ status: result });
+      });
+    if (squareWebhooks.sandbox) registerSquareWebhook('sandbox', squareWebhooks.sandbox);
+    if (squareWebhooks.production) registerSquareWebhook('production', squareWebhooks.production);
+  }
   if (verifyToken) {
     const authenticate = createAuthenticationGuard(verifyToken);
     app.get('/v1/identity/me', { preHandler: authenticate }, async (request) => ({
@@ -177,6 +238,120 @@ export function buildApp({
                 },
               })
             );
+          },
+        );
+        if (customerRepository.portalOverviewForSubject)
+          app.get(
+            '/v1/customer-portal/overview',
+            {
+              preHandler: [
+                authenticate,
+                createAuthorizationGuard(authorizer, {
+                  applicationKey: 'customer-portal',
+                  permissionKey: 'customer.portal.read',
+                }),
+              ],
+            },
+            async (request, reply) => {
+              const page = customerPortalPageSchema.safeParse(request.query);
+              if (!page.success)
+                return reply.code(400).send({
+                  error: {
+                    code: 'INVALID_CUSTOMER_PORTAL_PAGINATION',
+                    message: 'Pagination input is invalid.',
+                  },
+                });
+              return (
+                (await customerRepository.portalOverviewForSubject!(
+                  request.auth!.sub!,
+                  page.data,
+                )) ??
+                reply.code(404).send({
+                  error: {
+                    code: 'CUSTOMER_PROFILE_NOT_FOUND',
+                    message: 'Customer profile not found.',
+                  },
+                })
+              );
+            },
+          );
+      }
+      if (paymentRepository) {
+        const paymentRequirement = {
+          applicationKey: 'core-admin',
+          permissionKey: 'payment.manage',
+        };
+        app.post(
+          '/v1/core-admin/payments',
+          { preHandler: [authenticate, createAuthorizationGuard(authorizer, paymentRequirement)] },
+          async (request, reply) => {
+            const parsed = paymentRequestSchema.safeParse(request.body);
+            if (!parsed.success)
+              return reply
+                .code(400)
+                .send({ error: { code: 'INVALID_PAYMENT', message: 'Payment input is invalid.' } });
+            try {
+              return (
+                (await paymentRepository.createForSubject(
+                  request.auth!.sub!,
+                  parsed.data,
+                  String(request.headers['x-correlation-id'] ?? randomUUID()),
+                )) ??
+                reply.code(404).send({
+                  error: {
+                    code: 'PAYMENT_ACTOR_NOT_FOUND',
+                    message: 'Payment actor was not found.',
+                  },
+                })
+              );
+            } catch (error) {
+              if (error instanceof PaymentProviderError)
+                return reply.code(502).send({
+                  error: {
+                    code: 'PAYMENT_PROVIDER_UNAVAILABLE',
+                    message: 'Payment provider did not accept the request.',
+                  },
+                });
+              throw error;
+            }
+          },
+        );
+        app.post(
+          '/v1/core-admin/payments/:id/refunds',
+          { preHandler: [authenticate, createAuthorizationGuard(authorizer, paymentRequirement)] },
+          async (request, reply) => {
+            const parsed = refundRequestSchema.safeParse(request.body);
+            const id = (request.params as { id: string }).id;
+            if (!parsed.success || !zUuid(id))
+              return reply
+                .code(400)
+                .send({ error: { code: 'INVALID_REFUND', message: 'Refund input is invalid.' } });
+            try {
+              return (
+                (await paymentRepository.refundForSubject(
+                  request.auth!.sub!,
+                  id,
+                  parsed.data,
+                  String(request.headers['x-correlation-id'] ?? randomUUID()),
+                )) ??
+                reply
+                  .code(404)
+                  .send({ error: { code: 'PAYMENT_NOT_FOUND', message: 'Payment was not found.' } })
+              );
+            } catch (error) {
+              if (error instanceof PaymentProviderError)
+                return reply.code(502).send({
+                  error: {
+                    code: 'PAYMENT_PROVIDER_UNAVAILABLE',
+                    message: 'Payment provider did not accept the request.',
+                  },
+                });
+              if (error instanceof Error && error.message.startsWith('Refund amount exceeds'))
+                return reply.code(422).send({
+                  error: { code: 'REFUND_AMOUNT_EXCEEDS_PAYMENT', message: error.message },
+                });
+              throw error;
+            }
           },
         );
       }
