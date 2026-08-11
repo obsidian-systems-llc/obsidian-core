@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   loadPaymentProcessorConfiguration,
   loadSquareAdapterConfiguration,
+  loadSquareDeviceCareConfiguration,
   loadSquareWebhookConfiguration,
   paymentRequestSchema,
   SquarePaymentProvider,
@@ -36,6 +37,16 @@ describe('payment adapter contract', () => {
       signatureKey: sandbox.SQUARE_SANDBOX_WEBHOOK_SIGNATURE_KEY,
     });
     expect(loadSquareWebhookConfiguration('production', sandbox)).toBeUndefined();
+  });
+  it('requires both Square identifiers before Device Care enrollment is enabled', () => {
+    expect(loadSquareDeviceCareConfiguration(sandbox)).toBeUndefined();
+    expect(
+      loadSquareDeviceCareConfiguration({
+        ...sandbox,
+        SQUARE_SANDBOX_DEVICE_CARE_PLAN_VARIATION_ID: 'variation',
+        SQUARE_SANDBOX_DEVICE_CARE_ORDER_TEMPLATE_ID: 'order-template',
+      }),
+    ).toMatchObject({ environment: 'sandbox', planVariationId: 'variation' });
   });
   it('rejects production Square mode outside production', () =>
     expect(() =>

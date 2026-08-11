@@ -53,6 +53,11 @@ import {
   squareWebhookEventSchema,
   verifySquareWebhookSignature,
 } from './payments.js';
+import {
+  enrollDeviceCareSchema,
+  savePaymentMethodSchema,
+  type DeviceCareRepository,
+} from './device-care.js';
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -75,6 +80,7 @@ export type BuildAppOptions = {
   reportingRepository?: ReportingRepository;
   compensationRepository?: CompensationRepository;
   paymentRepository?: PaymentRepository;
+  deviceCareRepository?: DeviceCareRepository;
   squareWebhookRepository?: Pick<PaymentRepository, 'processSquareWebhook'>;
   squareWebhooks?: {
     production?: SquareWebhookConfiguration | undefined;
@@ -98,6 +104,7 @@ export function buildApp({
   reportingRepository,
   compensationRepository,
   paymentRepository,
+  deviceCareRepository,
   squareWebhookRepository,
   squareWebhooks,
   apiSecurity,
@@ -387,6 +394,109 @@ export function buildApp({
               );
             },
           );
+        if (deviceCareRepository) {
+          const deviceCareRequirement = {
+            applicationKey: 'customer-portal',
+            permissionKey: 'payment-method.manage',
+          };
+          app.post(
+            '/v1/customer-portal/payment-methods',
+            {
+              preHandler: [
+                authenticate,
+                createAuthorizationGuard(authorizer, deviceCareRequirement),
+              ],
+            },
+            async (request, reply) => {
+              const parsed = savePaymentMethodSchema.safeParse(request.body);
+              if (!parsed.success)
+                return reply.code(400).send({
+                  error: {
+                    code: 'INVALID_PAYMENT_METHOD',
+                    message: 'Payment method input is invalid.',
+                  },
+                });
+              try {
+                return (
+                  (await deviceCareRepository.savePaymentMethodForSubject(
+                    request.auth!.sub!,
+                    parsed.data,
+                    String(request.headers['x-correlation-id'] ?? randomUUID()),
+                  )) ??
+                  reply.code(404).send({
+                    error: {
+                      code: 'CUSTOMER_PROFILE_NOT_FOUND',
+                      message: 'Customer profile not found.',
+                    },
+                  })
+                );
+              } catch (error) {
+                request.log.warn({ error }, 'Device Care payment method was rejected.');
+                return reply.code(502).send({
+                  error: {
+                    code: 'PAYMENT_PROVIDER_UNAVAILABLE',
+                    message: 'Payment provider did not accept the payment method.',
+                  },
+                });
+              }
+            },
+          );
+          app.post(
+            '/v1/customer-portal/subscriptions/device-care',
+            {
+              preHandler: [
+                authenticate,
+                createAuthorizationGuard(authorizer, {
+                  applicationKey: 'customer-portal',
+                  permissionKey: 'subscription.enroll',
+                }),
+              ],
+            },
+            async (request, reply) => {
+              const parsed = enrollDeviceCareSchema.safeParse(request.body);
+              if (!parsed.success)
+                return reply.code(400).send({
+                  error: {
+                    code: 'INVALID_DEVICE_CARE_ENROLLMENT',
+                    message: 'Device Care enrollment input is invalid.',
+                  },
+                });
+              try {
+                return (
+                  (await deviceCareRepository.enrollForSubject(
+                    request.auth!.sub!,
+                    parsed.data,
+                    String(request.headers['x-correlation-id'] ?? randomUUID()),
+                  )) ??
+                  reply.code(404).send({
+                    error: {
+                      code: 'CUSTOMER_PROFILE_NOT_FOUND',
+                      message: 'Customer profile not found.',
+                    },
+                  })
+                );
+              } catch (error) {
+                if (
+                  error instanceof Error &&
+                  error.message === 'DEVICE_CARE_CONFIGURATION_UNAVAILABLE'
+                )
+                  return reply.code(409).send({
+                    error: {
+                      code: 'DEVICE_CARE_CONFIGURATION_UNAVAILABLE',
+                      message: 'A valid saved payment method and Device Care plan are required.',
+                    },
+                  });
+                request.log.warn({ error }, 'Device Care enrollment was rejected.');
+                return reply.code(502).send({
+                  error: {
+                    code: 'PAYMENT_PROVIDER_UNAVAILABLE',
+                    message: 'Payment provider did not accept the enrollment.',
+                  },
+                });
+              }
+            },
+          );
+        }
       }
       if (paymentRepository) {
         const paymentRequirement = {

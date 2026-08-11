@@ -53,6 +53,12 @@ export type SquareWebhookConfiguration = {
   notificationUrl: string;
   signatureKey: string;
 };
+export type SquareDeviceCareConfiguration = {
+  environment: 'production' | 'sandbox';
+  locationId: string;
+  planVariationId: string;
+  orderTemplateId: string;
+};
 export type WorldpayAdapterConfiguration = {
   baseUrl: string;
   environment: 'production' | 'try';
@@ -70,11 +76,15 @@ type PaymentEnvironment = {
   SQUARE_PRODUCTION_ACCESS_TOKEN?: string;
   SQUARE_PRODUCTION_APPLICATION_ID?: string;
   SQUARE_PRODUCTION_LOCATION_ID?: string;
+  SQUARE_PRODUCTION_DEVICE_CARE_PLAN_VARIATION_ID?: string;
+  SQUARE_PRODUCTION_DEVICE_CARE_ORDER_TEMPLATE_ID?: string;
   SQUARE_PRODUCTION_WEBHOOK_NOTIFICATION_URL?: string;
   SQUARE_PRODUCTION_WEBHOOK_SIGNATURE_KEY?: string;
   SQUARE_SANDBOX_ACCESS_TOKEN?: string;
   SQUARE_SANDBOX_APPLICATION_ID?: string;
   SQUARE_SANDBOX_LOCATION_ID?: string;
+  SQUARE_SANDBOX_DEVICE_CARE_PLAN_VARIATION_ID?: string;
+  SQUARE_SANDBOX_DEVICE_CARE_ORDER_TEMPLATE_ID?: string;
   SQUARE_SANDBOX_WEBHOOK_NOTIFICATION_URL?: string;
   SQUARE_SANDBOX_WEBHOOK_SIGNATURE_KEY?: string;
   WORLDPAY_BASE_URL?: string;
@@ -137,6 +147,24 @@ export function loadSquareWebhookConfiguration(
   if (!z.url().safeParse(notificationUrl).success)
     throw new Error('Square webhook notification URL must be an absolute URL.');
   return { environment, notificationUrl, signatureKey };
+}
+
+/** Loads the opt-in Device Care catalog mapping without enabling card collection by itself. */
+export function loadSquareDeviceCareConfiguration(
+  source: PaymentEnvironment = process.env,
+): SquareDeviceCareConfiguration | undefined {
+  const environment = source.SQUARE_ENVIRONMENT ?? 'sandbox';
+  if (environment !== 'sandbox' && environment !== 'production')
+    throw new Error('SQUARE_ENVIRONMENT must be sandbox or production.');
+  const prefix = environment === 'production' ? 'SQUARE_PRODUCTION' : 'SQUARE_SANDBOX';
+  const value = (name: string) => source[`${prefix}_${name}` as keyof PaymentEnvironment];
+  const locationId = value('LOCATION_ID');
+  const planVariationId = value('DEVICE_CARE_PLAN_VARIATION_ID');
+  const orderTemplateId = value('DEVICE_CARE_ORDER_TEMPLATE_ID');
+  if (!planVariationId && !orderTemplateId) return undefined;
+  if (!locationId || !planVariationId || !orderTemplateId)
+    throw new Error(`Incomplete ${environment} Device Care Square configuration.`);
+  return { environment, locationId, planVariationId, orderTemplateId };
 }
 
 export function loadWorldpayAdapterConfiguration(

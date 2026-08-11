@@ -16,10 +16,12 @@ import { PostgresReportingRepository } from './reporting.js';
 import { PostgresCompensationRepository } from './compensation.js';
 import {
   loadPaymentProcessorConfiguration,
+  loadSquareDeviceCareConfiguration,
   loadSquareWebhookConfiguration,
   PostgresPaymentRepository,
   SquarePaymentProvider,
 } from './payments.js';
+import { PostgresDeviceCareRepository, SquareDeviceCareProvider } from './device-care.js';
 
 const environment = loadEnvironment();
 const fieldEncryptor = loadFieldEncryptor(environment);
@@ -37,6 +39,18 @@ const paymentRepository = paymentConfiguration
       new SquarePaymentProvider(paymentConfiguration.configuration),
     )
   : undefined;
+const deviceCareConfiguration =
+  paymentConfiguration?.processor === 'square'
+    ? loadSquareDeviceCareConfiguration(process.env)
+    : undefined;
+const deviceCareRepository =
+  paymentConfiguration?.processor === 'square' && deviceCareConfiguration
+    ? new PostgresDeviceCareRepository(
+        environment.DATABASE_URL,
+        new SquareDeviceCareProvider(paymentConfiguration.configuration, deviceCareConfiguration),
+        deviceCareConfiguration.environment,
+      )
+    : undefined;
 const squareWebhooks = {
   sandbox: loadSquareWebhookConfiguration('sandbox', process.env),
   production: loadSquareWebhookConfiguration('production', process.env),
@@ -64,6 +78,7 @@ const app = buildApp({
         squareWebhooks,
       }
     : {}),
+  ...(deviceCareRepository ? { deviceCareRepository } : {}),
   ...(squareWebhookRepository
     ? {
         squareWebhookRepository,

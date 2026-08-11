@@ -60,6 +60,8 @@ permission, and `400` with a stable route-specific `INVALID_*` code for invalid 
 | POST | `/v1/customer-portal/addresses` | `customer-portal` + `customer.profile.write` | Adds an encrypted address owned by the caller. |
 | POST | `/v1/customer-portal/devices` | `customer-portal` + `customer.profile.write` | Adds an encrypted device owned by the caller. |
 | POST | `/v1/customer-portal/repair-requests` | `customer-portal` + `repair-request.create` | Creates an idempotent, customer-owned requested repair job. |
+| POST | `/v1/customer-portal/payment-methods` | `customer-portal` + `payment-method.manage` | Saves a tokenized Square card on the caller's Core-owned payment profile. |
+| POST | `/v1/customer-portal/subscriptions/device-care` | `customer-portal` + `subscription.enroll` | Enrolls the caller in the configured Device Care plan using an owned saved card. |
 | GET | `/v1/customer-portal/overview` | `customer-portal` + `customer.portal.read` | Returns the caller's owned portal records, excluding payment data until the portal-payment follow-up. |
 | GET | `/v1/employee-portal/profile` | `employee-portal` + `employee.profile.read` | Returns the caller's employee profile and effective assignments. |
 | GET | `/v1/employee-portal/time-entries` | `employee-portal` + `timekeeping.self.manage` | Lists the caller's time entries. |
@@ -407,6 +409,13 @@ verification, provider-event replay protection, and payment-state audit history.
 implement invoices, saved-payment-method lifecycle, Square Catalog plan synchronization, or
 automated recurring billing; those remain CORE-018/021/022 follow-up work.
 
+For the configured Device Care enrollment workflow, set the active environment's
+`SQUARE_*_DEVICE_CARE_PLAN_VARIATION_ID` and `SQUARE_*_DEVICE_CARE_ORDER_TEMPLATE_ID`. The order
+template must be a customer-neutral, open Square order containing the `$15.00` item variation; Core
+combines it with the authenticated customer's Square customer ID and a card-on-file ID. For the
+current sandbox configuration, use `NVzIs5FJwKYC5C7fvRs2gtTHTe4F` as the order-template value. Do
+not place this identifier in a client application or use a customer-specific order as the template.
+
 ### Payment-provider adapter contract
 
 CORE-012 verifies Square's documented sandbox, payment, subscription, invoice, idempotency, and
@@ -422,10 +431,22 @@ its replay ledger or changes payment state.
 
 ### Subscription plans
 
-**Current implementation boundary:** `POST /v1/executive/subscription-plan-versions` is
-executive-authorized, serialized per plan key, transactional, and audited. Customer subscription
-enrollment, invoicing, charging, renewal, and dunning are intentionally deferred to the payment and
-recurring-billing priorities.
+`POST /v1/executive/subscription-plan-versions` is executive-authorized, serialized per plan key,
+transactional, and audited. Core seeds the initial `$15.00` monthly `device-care` version and
+preserves all later executive-created versions. The customer enrollment boundary additionally saves
+only Square's card-on-file reference and safe display metadata (brand, last four digits, and expiry),
+never a raw card number, CVV, source token, or buyer-verification token.
+
+`POST /v1/customer-portal/payment-methods` accepts `{ cardholderName, sourceId,
+verificationToken?, saveCardConsent: true, idempotencyKey }`. `sourceId` and optional
+`verificationToken` must be produced by Square's browser SDK and are forwarded once to Square; they
+are not persisted or logged. It returns `{ id, brand, last4, expMonth, expYear, status }`.
+`POST /v1/customer-portal/subscriptions/device-care` accepts `{ paymentMethodId, idempotencyKey }`,
+requires the caller to own an active saved card, then creates the Square subscription and returns the
+Core agreement `{ id, status, renewalAt, providerSubscriptionReference }`. Invalid bodies return
+`400`; missing profile returns `404 CUSTOMER_PROFILE_NOT_FOUND`; missing card/configuration returns
+`409 DEVICE_CARE_CONFIGURATION_UNAVAILABLE`; Square rejection returns `502
+PAYMENT_PROVIDER_UNAVAILABLE`. Both operations are idempotent and safely audited.
 
 Subscription plans and their effective-dated versions use integer minor-unit prices, cadence, and
 optional provider references. Customer subscriptions preserve the selected plan version and safe

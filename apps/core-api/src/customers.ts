@@ -411,6 +411,8 @@ export class PostgresCustomerRepository implements CustomerRepository {
       ['customer.profile.write', 'Manage own customer profile'],
       ['customer.portal.read', 'Read own customer portal'],
       ['repair-request.create', 'Create own repair requests'],
+      ['payment-method.manage', 'Manage own saved payment methods'],
+      ['subscription.enroll', 'Enroll in available subscriptions'],
     ]) {
       const permission = await client.query<{ id: string }>(
         `INSERT INTO permissions (key,name) VALUES ($1,$2) ON CONFLICT (key) DO UPDATE SET name=EXCLUDED.name RETURNING id`,
