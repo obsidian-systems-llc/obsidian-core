@@ -55,6 +55,7 @@ import {
 } from './payments.js';
 import {
   enrollDeviceCareSchema,
+  paymentMethodMutationSchema,
   savePaymentMethodSchema,
   type DeviceCareRepository,
 } from './device-care.js';
@@ -441,6 +442,129 @@ export function buildApp({
               }
             },
           );
+          app.get(
+            '/v1/customer-portal/payment-methods',
+            {
+              preHandler: [
+                authenticate,
+                createAuthorizationGuard(authorizer, {
+                  applicationKey: 'customer-portal',
+                  permissionKey: 'payment-method.read',
+                }),
+              ],
+            },
+            async (request, reply) =>
+              (await deviceCareRepository.listPaymentMethodsForSubject(request.auth!.sub!)) ??
+              reply.code(404).send({
+                error: {
+                  code: 'CUSTOMER_PROFILE_NOT_FOUND',
+                  message: 'Customer profile not found.',
+                },
+              }),
+          );
+          app.put(
+            '/v1/customer-portal/payment-methods/:id/primary',
+            {
+              preHandler: [
+                authenticate,
+                createAuthorizationGuard(authorizer, deviceCareRequirement),
+              ],
+            },
+            async (request, reply) => {
+              const parsed = paymentMethodMutationSchema.safeParse(request.body);
+              const id = (request.params as { id: string }).id;
+              if (!parsed.success || !zUuid(id))
+                return reply.code(400).send({
+                  error: {
+                    code: 'INVALID_PAYMENT_METHOD_MUTATION',
+                    message: 'Payment method update input is invalid.',
+                  },
+                });
+              try {
+                const result = await deviceCareRepository.setPrimaryPaymentMethodForSubject(
+                  request.auth!.sub!,
+                  id,
+                  parsed.data,
+                  String(request.headers['x-correlation-id'] ?? randomUUID()),
+                );
+                return (
+                  result ??
+                  reply.code(404).send({
+                    error: {
+                      code: 'PAYMENT_METHOD_NOT_FOUND',
+                      message: 'Payment method not found.',
+                    },
+                  })
+                );
+              } catch (error) {
+                request.log.warn({ error }, 'Primary payment method update was rejected.');
+                return reply.code(502).send({
+                  error: {
+                    code: 'PAYMENT_PROVIDER_UNAVAILABLE',
+                    message: 'Payment provider did not accept the payment method update.',
+                  },
+                });
+              }
+            },
+          );
+          app.delete(
+            '/v1/customer-portal/payment-methods/:id',
+            {
+              preHandler: [
+                authenticate,
+                createAuthorizationGuard(authorizer, deviceCareRequirement),
+              ],
+            },
+            async (request, reply) => {
+              const parsed = paymentMethodMutationSchema.safeParse(request.body);
+              const id = (request.params as { id: string }).id;
+              if (!parsed.success || !zUuid(id))
+                return reply.code(400).send({
+                  error: {
+                    code: 'INVALID_PAYMENT_METHOD_MUTATION',
+                    message: 'Payment method removal input is invalid.',
+                  },
+                });
+              try {
+                const result = await deviceCareRepository.removePaymentMethodForSubject(
+                  request.auth!.sub!,
+                  id,
+                  parsed.data,
+                  String(request.headers['x-correlation-id'] ?? randomUUID()),
+                );
+                if (result === 'in_use')
+                  return reply.code(409).send({
+                    error: {
+                      code: 'PAYMENT_METHOD_IN_USE',
+                      message: 'Payment method is linked to an active subscription.',
+                    },
+                  });
+                if (result === 'not_found')
+                  return reply.code(404).send({
+                    error: {
+                      code: 'PAYMENT_METHOD_NOT_FOUND',
+                      message: 'Payment method not found.',
+                    },
+                  });
+                if (result === null)
+                  return reply.code(404).send({
+                    error: {
+                      code: 'CUSTOMER_PROFILE_NOT_FOUND',
+                      message: 'Customer profile not found.',
+                    },
+                  });
+                return reply.code(result === 'duplicate' ? 200 : 202).send({ status: result });
+              } catch (error) {
+                request.log.warn({ error }, 'Payment method removal was rejected.');
+                return reply.code(502).send({
+                  error: {
+                    code: 'PAYMENT_PROVIDER_UNAVAILABLE',
+                    message: 'Payment provider did not accept the payment method removal.',
+                  },
+                });
+              }
+            },
+          );
           app.post(
             '/v1/customer-portal/subscriptions/device-care',
             {
@@ -491,6 +615,52 @@ export function buildApp({
                   error: {
                     code: 'PAYMENT_PROVIDER_UNAVAILABLE',
                     message: 'Payment provider did not accept the enrollment.',
+                  },
+                });
+              }
+            },
+          );
+          app.post(
+            '/v1/customer-portal/subscriptions/device-care/cancel',
+            {
+              preHandler: [
+                authenticate,
+                createAuthorizationGuard(authorizer, {
+                  applicationKey: 'customer-portal',
+                  permissionKey: 'subscription.cancel',
+                }),
+              ],
+            },
+            async (request, reply) => {
+              const parsed = paymentMethodMutationSchema.safeParse(request.body);
+              if (!parsed.success)
+                return reply.code(400).send({
+                  error: {
+                    code: 'INVALID_SUBSCRIPTION_CANCELLATION',
+                    message: 'Subscription cancellation input is invalid.',
+                  },
+                });
+              try {
+                const result = await deviceCareRepository.cancelForSubject(
+                  request.auth!.sub!,
+                  parsed.data,
+                  String(request.headers['x-correlation-id'] ?? randomUUID()),
+                );
+                return (
+                  result ??
+                  reply.code(404).send({
+                    error: {
+                      code: 'ACTIVE_SUBSCRIPTION_NOT_FOUND',
+                      message: 'Active Device Care subscription not found.',
+                    },
+                  })
+                );
+              } catch (error) {
+                request.log.warn({ error }, 'Device Care cancellation was rejected.');
+                return reply.code(502).send({
+                  error: {
+                    code: 'PAYMENT_PROVIDER_UNAVAILABLE',
+                    message: 'Payment provider did not accept the cancellation.',
                   },
                 });
               }

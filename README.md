@@ -61,7 +61,11 @@ permission, and `400` with a stable route-specific `INVALID_*` code for invalid 
 | POST | `/v1/customer-portal/devices` | `customer-portal` + `customer.profile.write` | Adds an encrypted device owned by the caller. |
 | POST | `/v1/customer-portal/repair-requests` | `customer-portal` + `repair-request.create` | Creates an idempotent, customer-owned requested repair job. |
 | POST | `/v1/customer-portal/payment-methods` | `customer-portal` + `payment-method.manage` | Saves a tokenized Square card on the caller's Core-owned payment profile. |
+| GET | `/v1/customer-portal/payment-methods` | `customer-portal` + `payment-method.read` | Lists only the caller's safe saved-card metadata. |
+| PUT | `/v1/customer-portal/payment-methods/:id/primary` | `customer-portal` + `payment-method.manage` | Sets the primary card and replaces the billing card for active Device Care subscriptions. |
+| DELETE | `/v1/customer-portal/payment-methods/:id` | `customer-portal` + `payment-method.manage` | Disables an unlinked saved Square card. |
 | POST | `/v1/customer-portal/subscriptions/device-care` | `customer-portal` + `subscription.enroll` | Enrolls the caller in the configured Device Care plan using an owned saved card. |
+| POST | `/v1/customer-portal/subscriptions/device-care/cancel` | `customer-portal` + `subscription.cancel` | Schedules cancellation at the Square billing-period boundary. |
 | GET | `/v1/customer-portal/overview` | `customer-portal` + `customer.portal.read` | Returns the caller's owned portal records, excluding payment data until the portal-payment follow-up. |
 | GET | `/v1/employee-portal/profile` | `employee-portal` + `employee.profile.read` | Returns the caller's employee profile and effective assignments. |
 | GET | `/v1/employee-portal/time-entries` | `employee-portal` + `timekeeping.self.manage` | Lists the caller's time entries. |
@@ -447,6 +451,18 @@ Core agreement `{ id, status, renewalAt, providerSubscriptionReference }`. Inval
 `400`; missing profile returns `404 CUSTOMER_PROFILE_NOT_FOUND`; missing card/configuration returns
 `409 DEVICE_CARE_CONFIGURATION_UNAVAILABLE`; Square rejection returns `502
 PAYMENT_PROVIDER_UNAVAILABLE`. Both operations are idempotent and safely audited.
+
+Customer payment-method lifecycle is Core-owned. `GET /v1/customer-portal/payment-methods` returns
+only `{ id, brand, last4, expMonth, expYear, status, isPrimary }`; it never returns Square customer
+IDs, card IDs, card source tokens, or raw payment data. `PUT
+/v1/customer-portal/payment-methods/:id/primary` accepts `{ idempotencyKey }`, atomically records
+the new primary method, and asks Square to replace the card used by every current Device Care
+subscription owned by that customer. `DELETE /v1/customer-portal/payment-methods/:id` accepts the
+same idempotency body and disables the Square card only when no pending, active, past-due, or grace
+subscription references it; otherwise it returns `409 PAYMENT_METHOD_IN_USE`. `POST
+/v1/customer-portal/subscriptions/device-care/cancel` accepts `{ idempotencyKey }` and schedules
+cancellation through Square at the end of the active billing period. The agreement remains active
+until Square reports the final canceled state, so its billing card cannot be removed prematurely.
 
 Subscription plans and their effective-dated versions use integer minor-unit prices, cadence, and
 optional provider references. Customer subscriptions preserve the selected plan version and safe
