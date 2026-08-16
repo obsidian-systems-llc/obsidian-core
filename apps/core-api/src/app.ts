@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { JWTPayload } from 'jose';
 import Fastify, { type FastifyInstance } from 'fastify';
+import { z } from 'zod';
 import { createAuthenticationGuard, type TokenVerifier } from './authentication.js';
 import { createAuthorizationGuard, type Authorizer } from './authorization.js';
 import { checkDatabase } from './health.js';
@@ -63,6 +64,7 @@ import {
   type DeviceCareRepository,
 } from './device-care.js';
 import type { DeviceCareWallet } from './device-care-wallet.js';
+import { retellWebhookSchema, verifyRetellWebhook, type RetellCallRepository } from './retell.js';
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -92,6 +94,7 @@ export type BuildAppOptions = {
     production?: SquareWebhookConfiguration | undefined;
     sandbox?: SquareWebhookConfiguration | undefined;
   };
+  retell?: { apiKey: string; repository: RetellCallRepository };
   apiSecurity?: ApiSecurityConfig;
   verifyToken?: TokenVerifier;
 };
@@ -114,6 +117,7 @@ export function buildApp({
   deviceCareWalletRepository,
   squareWebhookRepository,
   squareWebhooks,
+  retell,
   apiSecurity,
   verifyToken,
 }: BuildAppOptions = {}): FastifyInstance {
@@ -206,11 +210,189 @@ export function buildApp({
     if (squareWebhooks.sandbox) registerSquareWebhook('sandbox', squareWebhooks.sandbox);
     if (squareWebhooks.production) registerSquareWebhook('production', squareWebhooks.production);
   }
+  if (retell)
+    app.post('/v1/webhooks/retell', async (request, reply) => {
+      const signature = request.headers['x-retell-signature'];
+      const payload = request.rawBody;
+      if (
+        typeof signature !== 'string' ||
+        !payload ||
+        !verifyRetellWebhook({ apiKey: retell.apiKey, payload, signature })
+      )
+        return reply.code(403).send({
+          error: { code: 'INVALID_WEBHOOK_SIGNATURE', message: 'Webhook signature is invalid.' },
+        });
+      const parsed = retellWebhookSchema.safeParse(request.body);
+      if (!parsed.success)
+        return reply.code(400).send({
+          error: { code: 'INVALID_RETELL_WEBHOOK', message: 'Webhook payload is invalid.' },
+        });
+      const result = await retell.repository.processWebhook(parsed.data, payload);
+      return reply.code(result === 'duplicate' ? 200 : 202).send({ status: result });
+    });
   if (verifyToken) {
     const authenticate = createAuthenticationGuard(verifyToken);
     app.get('/v1/identity/me', { preHandler: authenticate }, async (request) => ({
       subject: request.auth?.sub,
     }));
+    if (retell && authorizer) {
+      app.get(
+        '/v1/employee-portal/communications/calls',
+        {
+          preHandler: [
+            authenticate,
+            createAuthorizationGuard(authorizer, {
+              applicationKey: 'employee-portal',
+              permissionKey: 'communication.call.read',
+            }),
+          ],
+        },
+        async (request, reply) =>
+          (await retell.repository.listForEmployee(request.auth!.sub!)) ??
+          reply.code(404).send({
+            error: { code: 'EMPLOYEE_PROFILE_NOT_FOUND', message: 'Employee profile not found.' },
+          }),
+      );
+      app.get(
+        '/v1/employee-portal/communications/calls/:id',
+        {
+          preHandler: [
+            authenticate,
+            createAuthorizationGuard(authorizer, {
+              applicationKey: 'employee-portal',
+              permissionKey: 'communication.call.read',
+            }),
+          ],
+        },
+        async (request, reply) => {
+          const id = (request.params as { id: string }).id;
+          if (!zUuid(id))
+            return reply.code(400).send({
+              error: { code: 'INVALID_COMMUNICATION_CALL', message: 'Call ID is invalid.' },
+            });
+          return (
+            (await retell.repository.getForEmployee(request.auth!.sub!, id)) ??
+            reply.code(404).send({
+              error: { code: 'COMMUNICATION_CALL_NOT_FOUND', message: 'Call not found.' },
+            })
+          );
+        },
+      );
+      app.post(
+        '/v1/employee-portal/communications/calls/:id/claim',
+        {
+          preHandler: [
+            authenticate,
+            createAuthorizationGuard(authorizer, {
+              applicationKey: 'employee-portal',
+              permissionKey: 'communication.call.claim',
+            }),
+          ],
+        },
+        async (request, reply) => {
+          const id = (request.params as { id: string }).id;
+          if (!zUuid(id))
+            return reply.code(400).send({
+              error: { code: 'INVALID_COMMUNICATION_CALL', message: 'Call ID is invalid.' },
+            });
+          const result = await retell.repository.claimForEmployee(request.auth!.sub!, id);
+          if (result === 'claimed') return { status: result };
+          if (result === 'employee_not_found')
+            return reply.code(404).send({
+              error: {
+                code: 'EMPLOYEE_PROFILE_NOT_FOUND',
+                message: 'Employee profile not found.',
+              },
+            });
+          return reply.code(409).send({
+            error: { code: 'CALL_ALREADY_ASSIGNED', message: 'Call is already assigned.' },
+          });
+        },
+      );
+      app.post(
+        '/v1/employee-portal/communications/calls/:id/follow-up/complete',
+        {
+          preHandler: [
+            authenticate,
+            createAuthorizationGuard(authorizer, {
+              applicationKey: 'employee-portal',
+              permissionKey: 'communication.call.follow_up',
+            }),
+          ],
+        },
+        async (request, reply) => {
+          const id = (request.params as { id: string }).id;
+          if (!zUuid(id))
+            return reply.code(400).send({
+              error: { code: 'INVALID_COMMUNICATION_CALL', message: 'Call ID is invalid.' },
+            });
+          const result = await retell.repository.completeFollowUpForEmployee(
+            request.auth!.sub!,
+            id,
+          );
+          if (result === null)
+            return reply.code(404).send({
+              error: {
+                code: 'EMPLOYEE_PROFILE_NOT_FOUND',
+                message: 'Employee profile not found.',
+              },
+            });
+          if (!result)
+            return reply.code(409).send({
+              error: {
+                code: 'FOLLOW_UP_NOT_ASSIGNABLE',
+                message: 'Follow-up is not assigned to this employee.',
+              },
+            });
+          return { status: 'completed' };
+        },
+      );
+      app.get(
+        '/v1/core-admin/communications/calls',
+        {
+          preHandler: [
+            authenticate,
+            createAuthorizationGuard(authorizer, {
+              applicationKey: 'core-admin',
+              permissionKey: 'communication.call.manage',
+            }),
+          ],
+        },
+        async () => retell.repository.listAll(),
+      );
+      app.put(
+        '/v1/core-admin/communications/calls/:id/assignment',
+        {
+          preHandler: [
+            authenticate,
+            createAuthorizationGuard(authorizer, {
+              applicationKey: 'core-admin',
+              permissionKey: 'communication.call.manage',
+            }),
+          ],
+        },
+        async (request, reply) => {
+          const id = (request.params as { id: string }).id;
+          const body = z.object({ employeeProfileId: z.uuid().nullable() }).safeParse(request.body);
+          if (!zUuid(id) || !body.success)
+            return reply.code(400).send({
+              error: {
+                code: 'INVALID_COMMUNICATION_ASSIGNMENT',
+                message: 'Assignment input is invalid.',
+              },
+            });
+          return (await retell.repository.assign(
+            id,
+            body.data.employeeProfileId,
+            request.auth!.sub!,
+          ))
+            ? { status: 'assigned' }
+            : reply.code(404).send({
+                error: { code: 'COMMUNICATION_CALL_NOT_FOUND', message: 'Call not found.' },
+              });
+        },
+      );
+    }
     if (deviceCareWalletRepository && authorizer)
       app.get(
         '/v1/customer-portal/device-care/wallet',

@@ -24,6 +24,12 @@ const environmentSchema = z.object({
     .enum(['true', 'false'])
     .default('false')
     .transform((value) => value === 'true'),
+  RETELL_ENABLED: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((value) => value === 'true'),
+  RETELL_API_KEY: z.string().min(1).optional(),
+  RETELL_WEBHOOK_SECRET: z.string().min(1).optional(),
 });
 
 export type Environment = z.infer<typeof environmentSchema>;
@@ -33,6 +39,8 @@ export function loadEnvironment(source: NodeJS.ProcessEnv = process.env): Enviro
   if (!result.success)
     throw new Error(`Invalid environment configuration: ${z.prettifyError(result.error)}`);
   const environment = result.data;
+  if (environment.RETELL_ENABLED && !environment.RETELL_API_KEY)
+    throw new Error('RETELL_API_KEY is required when RETELL_ENABLED=true.');
   const origins =
     environment.API_ALLOWED_ORIGINS?.split(',')
       .map((origin) => origin.trim())

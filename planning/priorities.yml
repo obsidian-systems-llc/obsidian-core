@@ -411,3 +411,17 @@ priorities:
       the customer wallet read contract are implemented as a safe foundation. Credit redemption,
       household/device eligibility, benefit-use intervals, lapse policy, and administrative
       entitlement management remain gated on CORE-030's authoritative repair settlement workflow.
+  - id: CORE-037
+    title: Communications architecture and Retell AI call integration
+    status: in_progress
+    priority: 36
+    dependencies: [CORE-005, CORE-007, CORE-008, CORE-028]
+    acceptance_criteria:
+      - Retell webhooks are raw-body signature verified, replay-safe, auditable, and create Core-owned call records
+      - Authorized employee and management APIs provide an actionable call inbox, detail, atomic claim, and assignment workflows
+      - Call analysis is treated as untrusted input and actionable follow-up notifications are created only after provider-confirmed post-call analysis
+    implementation_notes: >-
+      Phase 1 covers Retell configuration, signed call_started/call_ended/call_analyzed handling,
+      call records, analysis/transcript storage, incoming/outgoing state, assignment, and actionable
+      notification. CRM, outbound campaigns, DNC, repair conversion, and live agent tools remain
+      separately staged to avoid uncontrolled calling or unauthorized information disclosure.

@@ -70,6 +70,26 @@ permission, and `400` with a stable route-specific `INVALID_*` code for invalid 
 | POST | `/v1/customer-portal/subscriptions/device-care/cancel` | `customer-portal` + `subscription.cancel` | Schedules cancellation at the Square billing-period boundary. |
 | GET | `/v1/customer-portal/device-care/wallet` | `customer-portal` + `customer.portal.read` | Returns Core-calculated Device Care credit, membership, MAX, and discount state. |
 | GET | `/v1/customer-portal/overview` | `customer-portal` + `customer.portal.read` | Returns the caller's owned portal records, excluding payment data until the portal-payment follow-up. |
+| POST | `/v1/webhooks/retell` | Public, signed Retell webhook | Verifies and replay-protects Retell call lifecycle events. |
+| GET | `/v1/employee-portal/communications/calls` | `employee-portal` + `communication.call.read` | Lists the caller's assigned calls and actionable unassigned calls. |
+| GET | `/v1/employee-portal/communications/calls/:id` | `employee-portal` + `communication.call.read` | Returns an authorized call detail, including restricted transcript data. |
+| POST | `/v1/employee-portal/communications/calls/:id/claim` | `employee-portal` + `communication.call.claim` | Atomically claims an available call. |
+| POST | `/v1/employee-portal/communications/calls/:id/follow-up/complete` | `employee-portal` + `communication.call.follow_up` | Completes the caller's assigned follow-up. |
+| GET | `/v1/core-admin/communications/calls` | `core-admin` + `communication.call.manage` | Lists company-wide communications calls. |
+| PUT | `/v1/core-admin/communications/calls/:id/assignment` | `core-admin` + `communication.call.manage` | Assigns, reassigns, or unassigns a call. |
+
+### Retell communications integration
+
+Core enables the Retell endpoint only when `RETELL_ENABLED=true`. `POST /v1/webhooks/retell`
+accepts `call_started`, `call_ended`, and `call_analyzed` only after verifying Retell's timestamped
+raw-body signature. Core records a replay-safe provider event digest and upserts a Core-owned call;
+the Retell call ID remains available for reconciliation. Transcripts and analysis are restricted
+operational data and must be sanitized before dashboard display. A completed post-call analysis
+creates one actionable unassigned follow-up notification; call start/end events do not notify staff.
+
+Employee inbox routes expose only assigned calls or unassigned actionable work. Core Admin assignment
+and company-wide reads require `communication.call.manage`. The prospective dashboard and repair
+dashboard should use these same APIs rather than integrating with Retell directly.
 | GET | `/v1/employee-portal/profile` | `employee-portal` + `employee.profile.read` | Returns the caller's employee profile and effective assignments. |
 | GET | `/v1/employee-portal/time-entries` | `employee-portal` + `timekeeping.self.manage` | Lists the caller's time entries. |
 | POST | `/v1/employee-portal/time-entries` | `employee-portal` + `timekeeping.self.manage` | Creates an idempotent time entry. |
@@ -278,6 +298,7 @@ button; `403 FORBIDDEN` is authoritative.
 | `PAYMENTS_ENABLED` | No, default `false` | Explicit safety gate. Set `true` only after selected-provider credentials, public webhook subscription, and sandbox verification are complete. |
 | `PAYMENT_PROCESSOR` | No | Payment-provider selector: `square`, `worldpay`, or `commerce360`. `commerce360` is normalized to the Access Worldpay adapter configuration. Default: `square`. |
 | `SQUARE_*` | Required when `PAYMENTS_ENABLED=true` and Square is selected | Server-only access token, application/location IDs, API version, exact webhook notification URL, and webhook signature key. |
+| `RETELL_ENABLED`, `RETELL_API_KEY`, `RETELL_WEBHOOK_SECRET` | Retell is opt-in; API key required when enabled | Server-only Retell integration configuration. Retell's current webhook signature uses its designated webhook API key; the optional secret is reserved only for a separate provider-issued value. |
 | `WORLDPAY_*` | Reserved, disabled | Commerce360/Access Worldpay configuration; processing is deliberately blocked pending provider-issued values and verification. |
 
 Production deployment must use managed secret storage, HTTPS termination, a backed-up PostgreSQL

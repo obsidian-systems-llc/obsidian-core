@@ -23,6 +23,7 @@ import {
 } from './payments.js';
 import { PostgresDeviceCareRepository, SquareDeviceCareProvider } from './device-care.js';
 import { PostgresDeviceCareWalletRepository } from './device-care-wallet.js';
+import { PostgresRetellCallRepository } from './retell.js';
 
 const environment = loadEnvironment();
 const fieldEncryptor = loadFieldEncryptor(environment);
@@ -85,6 +86,14 @@ const app = buildApp({
     ? {
         squareWebhookRepository,
         squareWebhooks,
+      }
+    : {}),
+  ...(environment.RETELL_ENABLED
+    ? {
+        retell: {
+          apiKey: environment.RETELL_API_KEY!,
+          repository: new PostgresRetellCallRepository(environment.DATABASE_URL),
+        },
       }
     : {}),
   apiSecurity: {
