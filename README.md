@@ -75,6 +75,9 @@ permission, and `400` with a stable route-specific `INVALID_*` code for invalid 
 | GET | `/v1/employee-portal/communications/calls/:id` | `employee-portal` + `communication.call.read` | Returns an authorized call detail, including restricted transcript data. |
 | POST | `/v1/employee-portal/communications/calls/:id/claim` | `employee-portal` + `communication.call.claim` | Atomically claims an available call. |
 | POST | `/v1/employee-portal/communications/calls/:id/follow-up/complete` | `employee-portal` + `communication.call.follow_up` | Completes the caller's assigned follow-up. |
+| POST | `/v1/employee-portal/communications/calls/:id/repair-jobs` | `employee-portal` + `communication.call.repair.create` | Creates one reviewed, idempotent requested repair job linked to the authorized call. |
+| POST | `/v1/employee-portal/communications/calls/:id/leads` | `employee-portal` + `communication.lead.create` | Creates an encrypted reviewed prospect lead linked to the authorized call. |
+| POST | `/v1/employee-portal/communications/calls/:id/do-not-call` | `employee-portal` + `communication.dnc.manage` | Records an auditable Core-managed do-not-call suppression. |
 | GET | `/v1/core-admin/communications/calls` | `core-admin` + `communication.call.manage` | Lists company-wide communications calls. |
 | PUT | `/v1/core-admin/communications/calls/:id/assignment` | `core-admin` + `communication.call.manage` | Assigns, reassigns, or unassigns a call. |
 
@@ -90,6 +93,21 @@ creates one actionable unassigned follow-up notification; call start/end events 
 Employee inbox routes expose only assigned calls or unassigned actionable work. Core Admin assignment
 and company-wide reads require `communication.call.manage`. The prospective dashboard and repair
 dashboard should use these same APIs rather than integrating with Retell directly.
+
+### Communications workflow conversion
+
+For an inbound Retell call, Core attempts an exact active-customer match with a normalized, HMAC-protected
+phone lookup. Customer phone numbers and their lookup values are refreshed at registration and customer
+profile update; older profiles need a controlled profile update/backfill before they can match. Core does
+not decrypt every customer profile while processing a webhook.
+
+Employees must review all call-derived information before taking action. `POST .../repair-jobs` accepts an
+idempotency key, optional selected customer profile, and appointment window, then creates a single linked
+requested job; it never auto-creates a job from Retell analysis. `POST .../leads` encrypts submitted lead
+details at rest. `POST .../do-not-call` accepts a normalized phone number and reason, stores only a protected
+fingerprint for suppression matching, and is the authoritative opt-out record future outbound queues must
+check. Invalid input returns the corresponding `INVALID_COMMUNICATION_*` or `INVALID_DO_NOT_CALL_REQUEST`
+error; inaccessible calls return `COMMUNICATION_CALL_NOT_FOUND` without leaking their existence.
 | GET | `/v1/employee-portal/profile` | `employee-portal` + `employee.profile.read` | Returns the caller's employee profile and effective assignments. |
 | GET | `/v1/employee-portal/time-entries` | `employee-portal` + `timekeeping.self.manage` | Lists the caller's time entries. |
 | POST | `/v1/employee-portal/time-entries` | `employee-portal` + `timekeeping.self.manage` | Creates an idempotent time entry. |

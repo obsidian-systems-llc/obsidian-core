@@ -1,4 +1,4 @@
-import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
+import { createCipheriv, createDecipheriv, createHmac, randomBytes } from 'node:crypto';
 
 export type EncryptedValue = { authTag: Buffer; ciphertext: Buffer; iv: Buffer; keyId: string };
 
@@ -25,6 +25,14 @@ export class FieldEncryptor {
     return JSON.parse(
       Buffer.concat([decipher.update(value.ciphertext), decipher.final()]).toString('utf8'),
     ) as T;
+  }
+
+  /**
+   * Creates a domain-separated, non-reversible lookup value for encrypted contact
+   * data.  The raw contact value must never be stored in an index.
+   */
+  fingerprint(domain: string, value: string): string {
+    return createHmac('sha256', this.key).update(`${domain}:${value}`, 'utf8').digest('hex');
   }
 }
 

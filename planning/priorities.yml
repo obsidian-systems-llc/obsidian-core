@@ -413,7 +413,7 @@ priorities:
       entitlement management remain gated on CORE-030's authoritative repair settlement workflow.
   - id: CORE-037
     title: Communications architecture and Retell AI call integration
-    status: in_progress
+    status: done
     priority: 36
     dependencies: [CORE-005, CORE-007, CORE-008, CORE-028]
     acceptance_criteria:
@@ -425,3 +425,16 @@ priorities:
       call records, analysis/transcript storage, incoming/outgoing state, assignment, and actionable
       notification. CRM, outbound campaigns, DNC, repair conversion, and live agent tools remain
       separately staged to avoid uncontrolled calling or unauthorized information disclosure.
+  - id: CORE-038
+    title: Communications call-to-workflow conversion
+    status: done
+    priority: 37
+    dependencies: [CORE-037, CORE-007, CORE-008]
+    acceptance_criteria:
+      - Inbound calls match active customer profiles through a protected exact-phone lookup without decrypting profiles at webhook time
+      - Authorized employees can create reviewed, idempotent repair jobs and encrypted leads from calls without trusting AI analysis as authoritative input
+      - Core records auditable do-not-call suppression independently of Retell so future outbound work can enforce it
+    implementation_notes: >-
+      The Phase 2 workflow is intentionally write-first. Campaigns, CSV imports, outbound initiation,
+      lead reads/pipeline, scheduled follow-up due dates, and live Retell functions remain separate
+      priorities so they can receive their own authorization, consent, and operational contracts.

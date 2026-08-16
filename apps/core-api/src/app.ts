@@ -64,7 +64,15 @@ import {
   type DeviceCareRepository,
 } from './device-care.js';
 import type { DeviceCareWallet } from './device-care-wallet.js';
-import { retellWebhookSchema, verifyRetellWebhook, type RetellCallRepository } from './retell.js';
+import {
+  CommunicationWorkflowError,
+  communicationDoNotCallSchema,
+  communicationLeadSchema,
+  communicationRepairJobSchema,
+  retellWebhookSchema,
+  verifyRetellWebhook,
+  type RetellCallRepository,
+} from './retell.js';
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -347,6 +355,148 @@ export function buildApp({
           return { status: 'completed' };
         },
       );
+      if (retell.repository.createRepairJobForEmployee) {
+        app.post(
+          '/v1/employee-portal/communications/calls/:id/repair-jobs',
+          {
+            preHandler: [
+              authenticate,
+              createAuthorizationGuard(authorizer, {
+                applicationKey: 'employee-portal',
+                permissionKey: 'communication.call.repair.create',
+              }),
+            ],
+          },
+          async (request, reply) => {
+            const id = (request.params as { id: string }).id;
+            const parsed = communicationRepairJobSchema.safeParse(request.body);
+            if (!zUuid(id) || !parsed.success)
+              return reply.code(400).send({
+                error: {
+                  code: 'INVALID_COMMUNICATION_REPAIR_JOB',
+                  message: 'Repair job input is invalid.',
+                },
+              });
+            try {
+              const result = await retell.repository.createRepairJobForEmployee!(
+                request.auth!.sub!,
+                id,
+                parsed.data,
+                String(request.headers['x-correlation-id'] ?? randomUUID()),
+              );
+              if (result === null)
+                return reply.code(404).send({
+                  error: {
+                    code: 'EMPLOYEE_PROFILE_NOT_FOUND',
+                    message: 'Employee profile not found.',
+                  },
+                });
+              if (result === 'unavailable')
+                return reply.code(404).send({
+                  error: { code: 'COMMUNICATION_CALL_NOT_FOUND', message: 'Call not found.' },
+                });
+              return reply.code(201).send(result);
+            } catch (error) {
+              if (error instanceof CommunicationWorkflowError)
+                return reply.code(409).send({
+                  error: { code: 'COMMUNICATION_REPAIR_JOB_CONFLICT', message: error.message },
+                });
+              throw error;
+            }
+          },
+        );
+      }
+      if (retell.repository.createLeadForEmployee) {
+        app.post(
+          '/v1/employee-portal/communications/calls/:id/leads',
+          {
+            preHandler: [
+              authenticate,
+              createAuthorizationGuard(authorizer, {
+                applicationKey: 'employee-portal',
+                permissionKey: 'communication.lead.create',
+              }),
+            ],
+          },
+          async (request, reply) => {
+            const id = (request.params as { id: string }).id;
+            const parsed = communicationLeadSchema.safeParse(request.body);
+            if (!zUuid(id) || !parsed.success)
+              return reply.code(400).send({
+                error: { code: 'INVALID_COMMUNICATION_LEAD', message: 'Lead input is invalid.' },
+              });
+            const result = await retell.repository.createLeadForEmployee!(
+              request.auth!.sub!,
+              id,
+              parsed.data,
+              String(request.headers['x-correlation-id'] ?? randomUUID()),
+            );
+            if (result === null)
+              return reply.code(404).send({
+                error: {
+                  code: 'EMPLOYEE_PROFILE_NOT_FOUND',
+                  message: 'Employee profile not found.',
+                },
+              });
+            if (result === 'unavailable')
+              return reply.code(404).send({
+                error: { code: 'COMMUNICATION_CALL_NOT_FOUND', message: 'Call not found.' },
+              });
+            return reply.code(201).send(result);
+          },
+        );
+      }
+      if (retell.repository.suppressPhoneForEmployee) {
+        app.post(
+          '/v1/employee-portal/communications/calls/:id/do-not-call',
+          {
+            preHandler: [
+              authenticate,
+              createAuthorizationGuard(authorizer, {
+                applicationKey: 'employee-portal',
+                permissionKey: 'communication.dnc.manage',
+              }),
+            ],
+          },
+          async (request, reply) => {
+            const id = (request.params as { id: string }).id;
+            const parsed = communicationDoNotCallSchema.safeParse(request.body);
+            if (!zUuid(id) || !parsed.success)
+              return reply.code(400).send({
+                error: {
+                  code: 'INVALID_DO_NOT_CALL_REQUEST',
+                  message: 'Do-not-call input is invalid.',
+                },
+              });
+            try {
+              const result = await retell.repository.suppressPhoneForEmployee!(
+                request.auth!.sub!,
+                id,
+                parsed.data,
+                String(request.headers['x-correlation-id'] ?? randomUUID()),
+              );
+              if (result === null)
+                return reply.code(404).send({
+                  error: {
+                    code: 'EMPLOYEE_PROFILE_NOT_FOUND',
+                    message: 'Employee profile not found.',
+                  },
+                });
+              if (result === 'unavailable')
+                return reply.code(404).send({
+                  error: { code: 'COMMUNICATION_CALL_NOT_FOUND', message: 'Call not found.' },
+                });
+              return { status: 'suppressed' };
+            } catch (error) {
+              if (error instanceof CommunicationWorkflowError)
+                return reply.code(400).send({
+                  error: { code: 'INVALID_DO_NOT_CALL_REQUEST', message: error.message },
+                });
+              throw error;
+            }
+          },
+        );
+      }
       app.get(
         '/v1/core-admin/communications/calls',
         {

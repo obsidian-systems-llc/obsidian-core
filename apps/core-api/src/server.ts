@@ -92,7 +92,7 @@ const app = buildApp({
     ? {
         retell: {
           apiKey: environment.RETELL_API_KEY!,
-          repository: new PostgresRetellCallRepository(environment.DATABASE_URL),
+          repository: new PostgresRetellCallRepository(environment.DATABASE_URL, fieldEncryptor),
         },
       }
     : {}),

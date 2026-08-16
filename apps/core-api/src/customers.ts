@@ -198,6 +198,7 @@ export class PostgresCustomerRepository implements CustomerRepository {
         'INSERT INTO customer_profile_memberships (customer_profile_id,user_id) VALUES ($1,$2)',
         [profile.rows[0]!.id, userId],
       );
+      await this.syncPhoneLookups(client, profile.rows[0]!.id, input.profile);
       await this.ensurePortalAccess(client, userId);
       await this.audit(client, userId, 'customer.registered', profile.rows[0]!.id, correlationId, {
         profileFields: Object.keys(input.profile).sort(),
@@ -322,6 +323,7 @@ export class PostgresCustomerRepository implements CustomerRepository {
           input.idempotencyKey,
         ],
       );
+      await this.syncPhoneLookups(client, owner.profileId, input.profile);
       const changedFields = Array.from(
         new Set([...Object.keys(beforeValue), ...Object.keys(input.profile)]),
       )
@@ -632,6 +634,29 @@ export class PostgresCustomerRepository implements CustomerRepository {
       [userId, applicationId],
     );
   }
+  private async syncPhoneLookups(
+    client: Client,
+    customerProfileId: string,
+    profile: Record<string, string>,
+  ): Promise<void> {
+    const hashes = Array.from(
+      new Set(
+        Object.entries(profile)
+          .filter(([key]) => /(?:phone|mobile|telephone|cell)/i.test(key))
+          .map(([, value]) => normalizePhone(value))
+          .filter((value): value is string => value !== null)
+          .map((value) => this.encryptor.fingerprint('customer-phone-v1', value)),
+      ),
+    );
+    await client.query('DELETE FROM customer_contact_phone_lookups WHERE customer_profile_id=$1', [
+      customerProfileId,
+    ]);
+    for (const valueHash of hashes)
+      await client.query(
+        'INSERT INTO customer_contact_phone_lookups (customer_profile_id,value_hash) VALUES ($1,$2)',
+        [customerProfileId, valueHash],
+      );
+  }
   private async audit(
     client: Client,
     actorUserId: string,
@@ -665,4 +690,11 @@ export class PostgresCustomerRepository implements CustomerRepository {
       ],
     );
   }
+}
+
+function normalizePhone(value: string): string | null {
+  const digits = value.replace(/\D/g, '');
+  if (digits.length === 10) return `1${digits}`;
+  if (digits.length >= 11 && digits.length <= 15) return digits;
+  return null;
 }
