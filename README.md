@@ -75,6 +75,11 @@ permission, and `400` with a stable route-specific `INVALID_*` code for invalid 
 | PUT | `/v1/core-admin/customers/:id` | `core-admin` + `customer.manage`, step-up | Replaces an encrypted customer profile while preserving a revision. |
 | POST | `/v1/core-admin/repair-jobs/:id/customer-association` | `core-admin` + `repair.customer.manage`, step-up | Links, relinks, or removes a repair's customer association with immutable history. |
 | GET | `/v1/customer-portal/repairs` | `customer-portal` + `customer.portal.read` | Lists the caller's linked repair status and appointment windows only. |
+| GET | `/v1/employee-portal/customer-work` | `employee-portal` + `customer.work.complete` | Returns the caller's assigned repair/call work and safe actionable notifications. |
+| POST | `/v1/employee-portal/customer-work/:type/:id/route` | `employee-portal` + `customer.work.route` | Routes customer work to an employee within the manager's active scope. |
+| POST | `/v1/employee-portal/customer-work/:type/:id/escalate` | `employee-portal` + `customer.work.escalate` | Escalates work owned by the caller to high or urgent priority. |
+| POST | `/v1/employee-portal/customer-work/:type/:id/complete` | `employee-portal` + `customer.work.complete` | Completes the caller's routing/follow-up work. |
+| POST | `/v1/core-admin/customer-work/:type/:id/route` | `core-admin` + `customer.work.manage` | Routes customer work company-wide. |
 | GET | `/v1/customer-portal/profile` | `customer-portal` + `customer.profile.read` | Returns the caller's customer profile. |
 | POST | `/v1/customer-portal/registration` | Authenticated Auth0 user | Creates the caller's encrypted Core customer profile and least-privilege portal access. |
 | PUT | `/v1/customer-portal/profile` | `customer-portal` + `customer.profile.write` | Replaces the caller's encrypted Core profile with an idempotent revision. |
@@ -153,6 +158,22 @@ an immutable link/relink/removal event and updates the repair's current associat
 windowStart, windowEnd }` for repairs currently linked to the authenticated customer's profile.
 It excludes employee assignments, internal notes, transcripts, prices, and other employee-only
 operational data.
+
+### Customer-work routing and escalation
+
+Customer work uses `communication_call` or `repair_job` as `:type`. Routing requests accept
+`{ employeeProfileId|null, priority, reason, idempotencyKey }`; a `null` employee unassigns work.
+Manager routes require `customer.work.route` and can target only direct reports or employees sharing
+the caller's active store/department assignment. Core Admin `customer.work.manage` routes are
+company-wide. Escalation accepts `{ priority: "high"|"urgent", reason, idempotencyKey }` and is
+limited to the currently assigned employee. Completion accepts `{ reason, idempotencyKey }`; for
+calls it finishes the Core follow-up, while repair-job completion finishes only its routing task.
+
+Core appends an immutable routing event and creates safe actionable notifications containing only a
+work type and Core ID. Invalid requests return `400 INVALID_CUSTOMER_WORK_*`; inaccessible target
+employees return `403 CUSTOMER_WORK_SCOPE_FORBIDDEN`; absent work returns
+`404 CUSTOMER_WORK_NOT_FOUND`. `GET /v1/employee-portal/customer-work` returns only work currently
+assigned to the caller and notification metadata, never customer profile data.
 
 ### Retell communications integration
 

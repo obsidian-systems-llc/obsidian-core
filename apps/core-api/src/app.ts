@@ -26,6 +26,13 @@ import {
 } from './customers.js';
 import type { EmployeeRepository } from './employees.js';
 import {
+  customerWorkCompleteSchema,
+  customerWorkEscalateSchema,
+  customerWorkRouteSchema,
+  type CustomerWorkRoutingRepository,
+  type CustomerWorkType,
+} from './customer-work-routing.js';
+import {
   createAdminCustomerSchema,
   customerRepairPageSchema,
   repairCustomerAssociationSchema,
@@ -114,6 +121,7 @@ export type BuildAppOptions = {
   customerRepository?: CustomerRepository;
   customerAdministrationRepository?: CustomerAdministrationRepository;
   employeeRepository?: EmployeeRepository;
+  customerWorkRoutingRepository?: CustomerWorkRoutingRepository;
   employeeAdministrationRepository?: EmployeeAdministrationRepository;
   timekeepingRepository?: TimekeepingRepository;
   mobileTimekeepingRepository?: MobileTimekeepingRepository;
@@ -143,6 +151,7 @@ export function buildApp({
   customerRepository,
   customerAdministrationRepository,
   employeeRepository,
+  customerWorkRoutingRepository,
   employeeAdministrationRepository,
   timekeepingRepository,
   mobileTimekeepingRepository,
@@ -1185,6 +1194,128 @@ export function buildApp({
                     message: 'Customer profile not found.',
                   },
                 });
+          },
+        );
+      }
+      if (customerWorkRoutingRepository) {
+        const workType = (value: string): CustomerWorkType | null =>
+          value === 'communication_call' || value === 'repair_job' ? value : null;
+        const workError = (reply: FastifyReply, code: string) =>
+          reply.code(400).send({
+            error: { code, message: 'Customer work routing input is invalid.' },
+          });
+        const employeeWorkGuard = (permissionKey: string) => [
+          authenticate,
+          createAuthorizationGuard(authorizer, {
+            applicationKey: 'employee-portal',
+            permissionKey,
+          }),
+        ];
+        app.get(
+          '/v1/employee-portal/customer-work',
+          { preHandler: employeeWorkGuard('customer.work.complete') },
+          async (request, reply) =>
+            (await customerWorkRoutingRepository.listForEmployee(request.auth!.sub!)) ??
+            reply.code(404).send({
+              error: { code: 'EMPLOYEE_PROFILE_NOT_FOUND', message: 'Employee profile not found.' },
+            }),
+        );
+        const employeeAction = (action: 'route' | 'escalate' | 'complete', permissionKey: string) =>
+          app.post(
+            `/v1/employee-portal/customer-work/:type/:id/${action}`,
+            { preHandler: employeeWorkGuard(permissionKey) },
+            async (request, reply) => {
+              const { type, id } = request.params as { type: string; id: string };
+              const normalized = workType(type);
+              const schemas = {
+                route: customerWorkRouteSchema,
+                escalate: customerWorkEscalateSchema,
+                complete: customerWorkCompleteSchema,
+              };
+              const input = schemas[action].safeParse(request.body);
+              if (!normalized || !zUuid(id) || !input.success)
+                return workError(reply, `INVALID_CUSTOMER_WORK_${action.toUpperCase()}`);
+              const correlationId = String(request.headers['x-correlation-id'] ?? randomUUID());
+              const result =
+                action === 'route'
+                  ? await customerWorkRoutingRepository.route(
+                      request.auth!.sub!,
+                      normalized,
+                      id,
+                      input.data as z.infer<typeof customerWorkRouteSchema>,
+                      correlationId,
+                      false,
+                    )
+                  : action === 'escalate'
+                    ? await customerWorkRoutingRepository.escalate(
+                        request.auth!.sub!,
+                        normalized,
+                        id,
+                        input.data as z.infer<typeof customerWorkEscalateSchema>,
+                        correlationId,
+                      )
+                    : await customerWorkRoutingRepository.complete(
+                        request.auth!.sub!,
+                        normalized,
+                        id,
+                        input.data as z.infer<typeof customerWorkCompleteSchema>,
+                        correlationId,
+                      );
+              if (result === 'scope_forbidden' || result === 'not_owner')
+                return reply.code(403).send({
+                  error: {
+                    code: 'CUSTOMER_WORK_SCOPE_FORBIDDEN',
+                    message: 'Customer work is outside the caller scope.',
+                  },
+                });
+              return result
+                ? action === 'complete'
+                  ? { status: 'completed' }
+                  : result
+                : reply.code(404).send({
+                    error: {
+                      code: 'CUSTOMER_WORK_NOT_FOUND',
+                      message: 'Customer work not found.',
+                    },
+                  });
+            },
+          );
+        employeeAction('route', 'customer.work.route');
+        employeeAction('escalate', 'customer.work.escalate');
+        employeeAction('complete', 'customer.work.complete');
+        app.post(
+          '/v1/core-admin/customer-work/:type/:id/route',
+          {
+            preHandler: [
+              authenticate,
+              createAuthorizationGuard(authorizer, {
+                applicationKey: 'core-admin',
+                permissionKey: 'customer.work.manage',
+              }),
+            ],
+          },
+          async (request, reply) => {
+            const { type, id } = request.params as { type: string; id: string };
+            const input = customerWorkRouteSchema.safeParse(request.body);
+            const normalized = workType(type);
+            if (!normalized || !zUuid(id) || !input.success)
+              return workError(reply, 'INVALID_CUSTOMER_WORK_ROUTE');
+            return (
+              (await customerWorkRoutingRepository.route(
+                request.auth!.sub!,
+                normalized,
+                id,
+                input.data,
+                String(request.headers['x-correlation-id'] ?? randomUUID()),
+                true,
+              )) ??
+              reply.code(404).send({
+                error: {
+                  code: 'CUSTOMER_WORK_NOT_FOUND',
+                  message: 'Customer work or target employee not found.',
+                },
+              })
+            );
           },
         );
       }

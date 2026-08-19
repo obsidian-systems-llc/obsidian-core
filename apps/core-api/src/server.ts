@@ -9,6 +9,7 @@ import { PostgresOrganizationRepository } from './organizations.js';
 import { loadFieldEncryptor } from './encryption.js';
 import { PostgresCustomerRepository } from './customers.js';
 import { PostgresCustomerAdministrationRepository } from './customer-admin.js';
+import { PostgresCustomerWorkRoutingRepository } from './customer-work-routing.js';
 import { PostgresEmployeeRepository } from './employees.js';
 import { PostgresEmployeeAdministrationRepository } from './employee-admin.js';
 import { PostgresTimekeepingRepository } from './timekeeping.js';
@@ -73,6 +74,9 @@ const app = buildApp({
   customerAdministrationRepository: new PostgresCustomerAdministrationRepository(
     environment.DATABASE_URL,
     fieldEncryptor,
+  ),
+  customerWorkRoutingRepository: new PostgresCustomerWorkRoutingRepository(
+    environment.DATABASE_URL,
   ),
   employeeRepository: new PostgresEmployeeRepository(environment.DATABASE_URL, fieldEncryptor),
   employeeAdministrationRepository: new PostgresEmployeeAdministrationRepository(

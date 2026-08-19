@@ -351,7 +351,7 @@ priorities:
       - Customer portals expose linked repair status without revealing employee-only notes or operational data
   - id: CORE-029-04
     title: Customer communication routing and escalation
-    status: proposed
+    status: done
     priority: 28.04
     dependencies: [CORE-029-01, CORE-029-02, CORE-029-03, CORE-037, CORE-038]
     acceptance_criteria:
