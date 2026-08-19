@@ -62,6 +62,14 @@ permission, and `400` with a stable route-specific `INVALID_*` code for invalid 
 | POST | `/v1/core-admin/authorization/role-assignments/:id/revoke` | `core-admin` + `authorization.manage`, step-up | Ends an active role assignment with an auditable reason. |
 | POST | `/v1/core-admin/authorization/entitlements/:id/revoke` | `core-admin` + `authorization.manage`, step-up | Ends an active application entitlement with an auditable reason. |
 | GET | `/v1/core-admin/organization-hierarchy` | `core-admin` + `organization.read` | Returns active organization hierarchy. |
+| POST | `/v1/core-admin/employees` | `core-admin` + `employee.manage`, step-up | Creates an encrypted employee profile for an existing active Core user. |
+| GET | `/v1/core-admin/employees/:id` | `core-admin` + `employee.manage`, step-up | Reads an employee profile for authorized administration. |
+| PUT | `/v1/core-admin/employees/:id/profile` | `core-admin` + `employee.manage`, step-up | Replaces an encrypted employee profile while retaining an encrypted revision. |
+| POST | `/v1/core-admin/employees/:id/deactivate` | `core-admin` + `employee.manage`, step-up | Deactivates an employee and ends applicable current assignments. |
+| POST | `/v1/core-admin/employees/:id/reactivate` | `core-admin` + `employee.manage`, step-up | Reactivates a previously inactive employee profile. |
+| POST | `/v1/core-admin/employee-assignments` | `core-admin` + `employee.manage`, step-up | Creates an effective-dated store, department, and optional manager assignment. |
+| POST | `/v1/core-admin/employee-assignments/:id/end` | `core-admin` + `employee.manage`, step-up | Ends an active employee assignment at a supplied effective time. |
+| GET | `/v1/employee-portal/managed-employees` | `employee-portal` + `employee.scope.read` | Lists only employees in the caller's active management scope. |
 | GET | `/v1/customer-portal/profile` | `customer-portal` + `customer.profile.read` | Returns the caller's customer profile. |
 | POST | `/v1/customer-portal/registration` | Authenticated Auth0 user | Creates the caller's encrypted Core customer profile and least-privilege portal access. |
 | PUT | `/v1/customer-portal/profile` | `customer-portal` + `customer.profile.write` | Replaces the caller's encrypted Core profile with an idempotent revision. |
@@ -97,6 +105,29 @@ entitlements through these routes, and the protected `core-admin` Super Admin ro
 changed through the ordinary permission-replacement endpoint. Invalid bodies return the relevant
 `INVALID_AUTHORIZATION_*` error; unavailable users, roles, or applications return a generic
 `AUTHORIZATION_TARGET_NOT_FOUND` or `AUTHORIZATION_ROLE_NOT_FOUND` response.
+
+### Employee and manager administration
+
+Employee lifecycle and assignment writes are high-risk Core Admin operations. They require
+`employee.manage`, the `core-admin` entitlement, verified step-up authentication, a UUID
+`idempotencyKey`, and an existing active Core `userId`; this does not create an Auth0 account. The
+profile field map is encrypted at rest. Profile replacement creates an encrypted revision and audits
+only changed field names and the supplied reason. Creation, profile replacement, lifecycle changes,
+and assignment writes are replay-safe. Employee deactivation preserves the profile and its history,
+and ends applicable active assignments rather than deleting records.
+
+`POST /v1/core-admin/employee-assignments` accepts `{ employeeProfileId, storeId?, departmentId?,
+managerEmployeeProfileId?, effectiveFrom?, effectiveTo?, idempotencyKey }`; a store or department
+is required and, when both are present, the department must belong to that store. Overlapping
+assignments in the identical store/department scope return `409 EMPLOYEE_ASSIGNMENT_CONFLICT`.
+`POST .../:id/end` accepts `{ effectiveTo, reason, idempotencyKey }`; an end at or before the start
+returns `409 INVALID_ASSIGNMENT_EFFECTIVE_TO`.
+
+`GET /v1/employee-portal/managed-employees?limit=50&offset=0` is a paginated operational view. Core
+derives scope from the caller's current employee assignments; it returns direct reports and current
+employees sharing the caller's current store or department, never a client-specified or company-wide
+directory. The response is `{ items, nextOffset, page }`. Invalid admin input returns the documented
+`INVALID_EMPLOYEE_*` code; absent employee/scope resources return their specific `404` code.
 
 ### Retell communications integration
 

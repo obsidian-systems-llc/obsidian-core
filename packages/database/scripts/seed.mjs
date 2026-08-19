@@ -57,6 +57,7 @@ try {
   for (const permissionDefinition of [
     ['authorization.read', 'Read authorization'],
     ['authorization.manage', 'Manage authorization'],
+    ['employee.manage', 'Manage employee lifecycle and assignments'],
     ['organization.read', 'Read organization hierarchy'],
   ]) {
     const permission = await client.query(

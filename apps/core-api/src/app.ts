@@ -26,6 +26,15 @@ import {
 } from './customers.js';
 import type { EmployeeRepository } from './employees.js';
 import {
+  createEmployeeAssignmentSchema,
+  createEmployeeSchema,
+  employeeLifecycleSchema,
+  employeeManagementPageSchema,
+  endEmployeeAssignmentSchema,
+  replaceEmployeeProfileSchema,
+  type EmployeeAdministrationRepository,
+} from './employee-admin.js';
+import {
   createTimeCorrectionSchema,
   createTimeEntrySchema,
   mobileTimeEventSchema,
@@ -97,6 +106,7 @@ export type BuildAppOptions = {
   organizationRepository?: OrganizationRepository;
   customerRepository?: CustomerRepository;
   employeeRepository?: EmployeeRepository;
+  employeeAdministrationRepository?: EmployeeAdministrationRepository;
   timekeepingRepository?: TimekeepingRepository;
   mobileTimekeepingRepository?: MobileTimekeepingRepository;
   quoteRepository?: QuoteRepository;
@@ -124,6 +134,7 @@ export function buildApp({
   organizationRepository,
   customerRepository,
   employeeRepository,
+  employeeAdministrationRepository,
   timekeepingRepository,
   mobileTimekeepingRepository,
   quoteRepository,
@@ -821,6 +832,206 @@ export function buildApp({
             ],
           },
           async () => organizationRepository.getHierarchy(),
+        );
+      }
+      if (employeeAdministrationRepository) {
+        const employeeAdministrationGuards = [
+          authenticate,
+          async (request: FastifyRequest, reply: FastifyReply) => {
+            if (
+              !security?.stepUpClaim ||
+              !security.stepUpValue ||
+              hasStepUpAuthentication(request.auth!, security)
+            )
+              return;
+            return reply.code(403).send({
+              error: { code: 'STEP_UP_REQUIRED', message: 'Step-up authentication is required.' },
+            });
+          },
+          createAuthorizationGuard(authorizer, {
+            applicationKey: 'core-admin',
+            permissionKey: 'employee.manage',
+          }),
+        ];
+        const employeeInputError = (reply: FastifyReply, code: string) =>
+          reply.code(400).send({
+            error: { code, message: 'Employee administration input is invalid.' },
+          });
+        app.post(
+          '/v1/core-admin/employees',
+          { preHandler: employeeAdministrationGuards },
+          async (request, reply) => {
+            const input = createEmployeeSchema.safeParse(request.body);
+            if (!input.success) return employeeInputError(reply, 'INVALID_EMPLOYEE_CREATE');
+            const result = await employeeAdministrationRepository.create(
+              request.auth!.sub!,
+              input.data,
+              String(request.headers['x-correlation-id'] ?? randomUUID()),
+            );
+            if (result === 'conflict')
+              return reply.code(409).send({
+                error: {
+                  code: 'EMPLOYEE_CONFLICT',
+                  message: 'Employee identity or number already exists.',
+                },
+              });
+            return (
+              result ??
+              reply.code(404).send({
+                error: {
+                  code: 'EMPLOYEE_USER_NOT_FOUND',
+                  message: 'Active Core user not found.',
+                },
+              })
+            );
+          },
+        );
+        app.get(
+          '/v1/core-admin/employees/:id',
+          { preHandler: employeeAdministrationGuards },
+          async (request, reply) => {
+            const id = (request.params as { id: string }).id;
+            if (!zUuid(id)) return employeeInputError(reply, 'INVALID_EMPLOYEE_ID');
+            return (
+              (await employeeAdministrationRepository.getForAdmin(id)) ??
+              reply.code(404).send({
+                error: { code: 'EMPLOYEE_NOT_FOUND', message: 'Employee not found.' },
+              })
+            );
+          },
+        );
+        app.put(
+          '/v1/core-admin/employees/:id/profile',
+          { preHandler: employeeAdministrationGuards },
+          async (request, reply) => {
+            const id = (request.params as { id: string }).id;
+            const input = replaceEmployeeProfileSchema.safeParse(request.body);
+            if (!zUuid(id) || !input.success)
+              return employeeInputError(reply, 'INVALID_EMPLOYEE_PROFILE');
+            return (
+              (await employeeAdministrationRepository.replaceProfile(
+                request.auth!.sub!,
+                id,
+                input.data,
+                String(request.headers['x-correlation-id'] ?? randomUUID()),
+              )) ??
+              reply
+                .code(404)
+                .send({ error: { code: 'EMPLOYEE_NOT_FOUND', message: 'Employee not found.' } })
+            );
+          },
+        );
+        const lifecycle = (route: string, method: 'deactivate' | 'reactivate') =>
+          app.post(route, { preHandler: employeeAdministrationGuards }, async (request, reply) => {
+            const id = (request.params as { id: string }).id;
+            const input = employeeLifecycleSchema.safeParse(request.body);
+            if (!zUuid(id) || !input.success)
+              return employeeInputError(reply, 'INVALID_EMPLOYEE_LIFECYCLE');
+            const result = await employeeAdministrationRepository[method](
+              request.auth!.sub!,
+              id,
+              input.data,
+              String(request.headers['x-correlation-id'] ?? randomUUID()),
+            );
+            return result
+              ? { status: method === 'deactivate' ? 'deactivated' : 'active' }
+              : reply.code(409).send({
+                  error: {
+                    code: 'EMPLOYEE_LIFECYCLE_CONFLICT',
+                    message: 'Employee was not eligible for this lifecycle change.',
+                  },
+                });
+          });
+        lifecycle('/v1/core-admin/employees/:id/deactivate', 'deactivate');
+        lifecycle('/v1/core-admin/employees/:id/reactivate', 'reactivate');
+        app.post(
+          '/v1/core-admin/employee-assignments',
+          { preHandler: employeeAdministrationGuards },
+          async (request, reply) => {
+            const input = createEmployeeAssignmentSchema.safeParse(request.body);
+            if (!input.success) return employeeInputError(reply, 'INVALID_EMPLOYEE_ASSIGNMENT');
+            const result = await employeeAdministrationRepository.createAssignment(
+              request.auth!.sub!,
+              input.data,
+              String(request.headers['x-correlation-id'] ?? randomUUID()),
+            );
+            if (result === 'conflict')
+              return reply.code(409).send({
+                error: {
+                  code: 'EMPLOYEE_ASSIGNMENT_CONFLICT',
+                  message: 'Assignment overlaps an existing assignment in the same scope.',
+                },
+              });
+            return (
+              result ??
+              reply.code(404).send({
+                error: {
+                  code: 'EMPLOYEE_ASSIGNMENT_TARGET_NOT_FOUND',
+                  message: 'Employee, manager, store, or department not found.',
+                },
+              })
+            );
+          },
+        );
+        app.post(
+          '/v1/core-admin/employee-assignments/:id/end',
+          { preHandler: employeeAdministrationGuards },
+          async (request, reply) => {
+            const id = (request.params as { id: string }).id;
+            const input = endEmployeeAssignmentSchema.safeParse(request.body);
+            if (!zUuid(id) || !input.success)
+              return employeeInputError(reply, 'INVALID_EMPLOYEE_ASSIGNMENT_END');
+            const result = await employeeAdministrationRepository.endAssignment(
+              request.auth!.sub!,
+              id,
+              input.data,
+              String(request.headers['x-correlation-id'] ?? randomUUID()),
+            );
+            if (result === 'invalid_effective_to')
+              return reply.code(409).send({
+                error: {
+                  code: 'INVALID_ASSIGNMENT_EFFECTIVE_TO',
+                  message: 'Assignment end must be after its start.',
+                },
+              });
+            return result
+              ? { status: 'ended' }
+              : reply.code(404).send({
+                  error: {
+                    code: 'EMPLOYEE_ASSIGNMENT_NOT_FOUND',
+                    message: 'Active employee assignment not found.',
+                  },
+                });
+          },
+        );
+        app.get(
+          '/v1/employee-portal/managed-employees',
+          {
+            preHandler: [
+              authenticate,
+              createAuthorizationGuard(authorizer, {
+                applicationKey: 'employee-portal',
+                permissionKey: 'employee.scope.read',
+              }),
+            ],
+          },
+          async (request, reply) => {
+            const page = employeeManagementPageSchema.safeParse(request.query);
+            if (!page.success)
+              return employeeInputError(reply, 'INVALID_MANAGED_EMPLOYEE_PAGINATION');
+            const result = await employeeAdministrationRepository.listManaged(
+              request.auth!.sub!,
+              page.data,
+            );
+            return {
+              ...result,
+              page: {
+                limit: page.data.limit,
+                offset: page.data.offset,
+                nextOffset: result.nextOffset,
+              },
+            };
+          },
         );
       }
       if (customerRepository) {

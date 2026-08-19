@@ -335,7 +335,7 @@ priorities:
       - The Core-admin, employee-portal, executive-panel, and customer-portal boundaries remain default-deny and their administrative contracts have allowed, denied, duplicate, and expiry coverage
   - id: CORE-029-02
     title: Employee, manager, and organizational administration
-    status: proposed
+    status: done
     priority: 28.02
     dependencies: [CORE-029-01, CORE-006, CORE-008]
     acceptance_criteria:
