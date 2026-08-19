@@ -1288,6 +1288,20 @@ export function buildApp({
           {
             preHandler: [
               authenticate,
+              async (request: FastifyRequest, reply: FastifyReply) => {
+                if (
+                  !security?.stepUpClaim ||
+                  !security.stepUpValue ||
+                  hasStepUpAuthentication(request.auth!, security)
+                )
+                  return;
+                return reply.code(403).send({
+                  error: {
+                    code: 'STEP_UP_REQUIRED',
+                    message: 'Step-up authentication is required.',
+                  },
+                });
+              },
               createAuthorizationGuard(authorizer, {
                 applicationKey: 'core-admin',
                 permissionKey: 'customer.work.manage',

@@ -1,0 +1,274 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "contractVersion": "1.0.0",
+  "title": "Obsidian Core Admin Operations API Contract",
+  "baseUrl": "https://api.obsidian-systems.tech",
+  "basePath": "/v1",
+  "conventions": {
+    "authentication": "Bearer Auth0 token for the Core API audience unless public",
+    "correlation": "Writes accept X-Correlation-Id UUID; Core generates one when omitted.",
+    "idempotency": "Write bodies marked idempotent require a UUID idempotencyKey; a retry returns its original result.",
+    "commonFailures": [
+      "401 UNAUTHENTICATED",
+      "403 FORBIDDEN",
+      "403 STEP_UP_REQUIRED",
+      "400 INVALID_*",
+      "404 *_NOT_FOUND",
+      "409 *_CONFLICT"
+    ]
+  },
+  "routes": [
+    {
+      "method": "GET",
+      "path": "/core-admin/authorization/roles",
+      "authorization": "core-admin + authorization.manage + step-up",
+      "request": "none",
+      "response": "active roles and permission keys",
+      "failures": ["UNAUTHENTICATED", "FORBIDDEN", "STEP_UP_REQUIRED"]
+    },
+    {
+      "method": "POST",
+      "path": "/core-admin/authorization/roles",
+      "authorization": "core-admin + authorization.manage + step-up",
+      "request": "{ applicationKey, key, name, permissionKeys, idempotencyKey }",
+      "response": "created/reactivated role",
+      "failures": ["INVALID_AUTHORIZATION_ROLE", "FORBIDDEN", "STEP_UP_REQUIRED"]
+    },
+    {
+      "method": "PUT",
+      "path": "/core-admin/authorization/roles/:id/permissions",
+      "authorization": "core-admin + authorization.manage + step-up",
+      "request": "{ permissionKeys, reason, idempotencyKey }",
+      "response": "role permission revision",
+      "failures": [
+        "INVALID_AUTHORIZATION_ROLE",
+        "ROLE_NOT_FOUND",
+        "PROTECTED_ROLE_MODIFICATION_FORBIDDEN"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/core-admin/authorization/role-assignments",
+      "authorization": "core-admin + authorization.manage + step-up",
+      "request": "{ userId, roleId, organizationId?, effectiveFrom?, effectiveTo?, idempotencyKey }",
+      "response": "effective-dated assignment",
+      "failures": [
+        "INVALID_AUTHORIZATION_ASSIGNMENT",
+        "AUTHORIZATION_RESOURCE_NOT_FOUND",
+        "SELF_ACCESS_CHANGE_FORBIDDEN"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/core-admin/authorization/entitlements",
+      "authorization": "core-admin + authorization.manage + step-up",
+      "request": "{ userId, applicationKey, effectiveFrom?, effectiveTo?, idempotencyKey }",
+      "response": "effective-dated entitlement",
+      "failures": [
+        "INVALID_APPLICATION_ENTITLEMENT",
+        "AUTHORIZATION_RESOURCE_NOT_FOUND",
+        "SELF_ACCESS_CHANGE_FORBIDDEN"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/core-admin/authorization/role-assignments/:id/revoke",
+      "authorization": "core-admin + authorization.manage + step-up",
+      "request": "{ reason, idempotencyKey }",
+      "response": "ended assignment",
+      "failures": [
+        "INVALID_AUTHORIZATION_REVOCATION",
+        "AUTHORIZATION_ASSIGNMENT_NOT_FOUND",
+        "SELF_ACCESS_CHANGE_FORBIDDEN"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/core-admin/authorization/entitlements/:id/revoke",
+      "authorization": "core-admin + authorization.manage + step-up",
+      "request": "{ reason, idempotencyKey }",
+      "response": "ended entitlement",
+      "failures": [
+        "INVALID_AUTHORIZATION_REVOCATION",
+        "APPLICATION_ENTITLEMENT_NOT_FOUND",
+        "SELF_ACCESS_CHANGE_FORBIDDEN"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/core-admin/organization-hierarchy",
+      "authorization": "core-admin + organization.read",
+      "request": "none",
+      "response": "active organization/store/department hierarchy",
+      "failures": ["UNAUTHENTICATED", "FORBIDDEN"]
+    },
+    {
+      "method": "POST",
+      "path": "/core-admin/employees",
+      "authorization": "core-admin + employee.manage + step-up",
+      "request": "{ userId, employeeNumber, profile, startDate?, idempotencyKey }",
+      "response": "encrypted employee profile",
+      "failures": ["INVALID_EMPLOYEE_CREATE", "EMPLOYEE_USER_NOT_FOUND", "EMPLOYEE_NUMBER_CONFLICT"]
+    },
+    {
+      "method": "GET",
+      "path": "/core-admin/employees/:id",
+      "authorization": "core-admin + employee.manage + step-up",
+      "request": "none",
+      "response": "decrypted authorized employee profile",
+      "failures": ["EMPLOYEE_PROFILE_NOT_FOUND", "FORBIDDEN", "STEP_UP_REQUIRED"]
+    },
+    {
+      "method": "PUT",
+      "path": "/core-admin/employees/:id/profile",
+      "authorization": "core-admin + employee.manage + step-up",
+      "request": "{ profile, reason, idempotencyKey }",
+      "response": "encrypted profile revision",
+      "failures": ["INVALID_EMPLOYEE_PROFILE", "EMPLOYEE_PROFILE_NOT_FOUND"]
+    },
+    {
+      "method": "POST",
+      "path": "/core-admin/employees/:id/deactivate",
+      "authorization": "core-admin + employee.manage + step-up",
+      "request": "{ reason, idempotencyKey }",
+      "response": "inactive employee profile",
+      "failures": ["INVALID_EMPLOYEE_LIFECYCLE", "EMPLOYEE_PROFILE_NOT_FOUND"]
+    },
+    {
+      "method": "POST",
+      "path": "/core-admin/employees/:id/reactivate",
+      "authorization": "core-admin + employee.manage + step-up",
+      "request": "{ reason, idempotencyKey }",
+      "response": "active employee profile",
+      "failures": ["INVALID_EMPLOYEE_LIFECYCLE", "EMPLOYEE_PROFILE_NOT_FOUND"]
+    },
+    {
+      "method": "POST",
+      "path": "/core-admin/employee-assignments",
+      "authorization": "core-admin + employee.manage + step-up",
+      "request": "{ employeeProfileId, storeId?, departmentId?, managerEmployeeProfileId?, effectiveFrom?, effectiveTo?, idempotencyKey }",
+      "response": "effective-dated assignment",
+      "failures": [
+        "INVALID_EMPLOYEE_ASSIGNMENT",
+        "EMPLOYEE_ASSIGNMENT_CONFLICT",
+        "EMPLOYEE_ASSIGNMENT_RESOURCE_NOT_FOUND"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/core-admin/employee-assignments/:id/end",
+      "authorization": "core-admin + employee.manage + step-up",
+      "request": "{ effectiveTo, reason, idempotencyKey }",
+      "response": "ended assignment",
+      "failures": [
+        "INVALID_EMPLOYEE_ASSIGNMENT_END",
+        "INVALID_ASSIGNMENT_EFFECTIVE_TO",
+        "EMPLOYEE_ASSIGNMENT_NOT_FOUND"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/employee-portal/managed-employees",
+      "authorization": "employee-portal + employee.scope.read",
+      "request": "query: limit, offset",
+      "response": "{ items, nextOffset, page } scoped to caller's current management assignments",
+      "failures": ["INVALID_PAGE", "EMPLOYEE_PROFILE_NOT_FOUND", "FORBIDDEN"]
+    },
+    {
+      "method": "POST",
+      "path": "/core-admin/customers",
+      "authorization": "core-admin + customer.manage + step-up",
+      "request": "{ profile, idempotencyKey }",
+      "response": "encrypted customer profile",
+      "failures": ["INVALID_CUSTOMER_CREATE", "FORBIDDEN", "STEP_UP_REQUIRED"]
+    },
+    {
+      "method": "GET",
+      "path": "/core-admin/customers/:id",
+      "authorization": "core-admin + customer.manage + step-up",
+      "request": "none",
+      "response": "decrypted authorized customer profile",
+      "failures": ["CUSTOMER_PROFILE_NOT_FOUND", "FORBIDDEN", "STEP_UP_REQUIRED"]
+    },
+    {
+      "method": "PUT",
+      "path": "/core-admin/customers/:id",
+      "authorization": "core-admin + customer.manage + step-up",
+      "request": "{ profile, reason, idempotencyKey }",
+      "response": "encrypted customer profile revision",
+      "failures": ["INVALID_CUSTOMER_UPDATE", "CUSTOMER_PROFILE_NOT_FOUND"]
+    },
+    {
+      "method": "POST",
+      "path": "/core-admin/repair-jobs/:id/customer-association",
+      "authorization": "core-admin + repair.customer.manage + step-up",
+      "request": "{ customerProfileId|null, reason, idempotencyKey }",
+      "response": "current association and immutable event",
+      "failures": [
+        "INVALID_REPAIR_CUSTOMER_ASSOCIATION",
+        "REPAIR_OR_CUSTOMER_NOT_FOUND",
+        "REPAIR_CUSTOMER_ASSOCIATION_UNCHANGED"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/customer-portal/repairs",
+      "authorization": "customer-portal + customer.portal.read",
+      "request": "query: limit, offset",
+      "response": "owned repair { id, status, windowStart, windowEnd } page",
+      "failures": ["INVALID_PAGE", "CUSTOMER_PROFILE_NOT_FOUND", "FORBIDDEN"]
+    },
+    {
+      "method": "GET",
+      "path": "/employee-portal/customer-work",
+      "authorization": "employee-portal + customer.work.complete",
+      "request": "none",
+      "response": "caller-owned work and safe notifications",
+      "failures": ["EMPLOYEE_PROFILE_NOT_FOUND", "FORBIDDEN"]
+    },
+    {
+      "method": "POST",
+      "path": "/employee-portal/customer-work/:type/:id/route",
+      "authorization": "employee-portal + customer.work.route",
+      "request": "{ employeeProfileId|null, priority, reason, idempotencyKey }; type: communication_call|repair_job",
+      "response": "routed work",
+      "failures": [
+        "INVALID_CUSTOMER_WORK_ROUTE",
+        "CUSTOMER_WORK_SCOPE_FORBIDDEN",
+        "CUSTOMER_WORK_NOT_FOUND"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/employee-portal/customer-work/:type/:id/escalate",
+      "authorization": "employee-portal + customer.work.escalate",
+      "request": "{ priority: high|urgent, reason, idempotencyKey }",
+      "response": "escalated work and manager notification",
+      "failures": [
+        "INVALID_CUSTOMER_WORK_ESCALATION",
+        "CUSTOMER_WORK_NOT_FOUND",
+        "CUSTOMER_WORK_NOT_OWNED"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/employee-portal/customer-work/:type/:id/complete",
+      "authorization": "employee-portal + customer.work.complete",
+      "request": "{ reason, idempotencyKey }",
+      "response": "{ status: completed }",
+      "failures": [
+        "INVALID_CUSTOMER_WORK_COMPLETION",
+        "CUSTOMER_WORK_NOT_FOUND",
+        "CUSTOMER_WORK_NOT_OWNED"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/core-admin/customer-work/:type/:id/route",
+      "authorization": "core-admin + customer.work.manage + step-up",
+      "request": "{ employeeProfileId|null, priority, reason, idempotencyKey }; type: communication_call|repair_job",
+      "response": "company-wide routed work",
+      "failures": ["INVALID_CUSTOMER_WORK_ROUTE", "CUSTOMER_WORK_NOT_FOUND", "STEP_UP_REQUIRED"]
+    }
+  ]
+}

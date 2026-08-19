@@ -152,7 +152,11 @@ export class PostgresCustomerWorkRoutingRepository implements CustomerWorkRoutin
         priority: string;
         status: string;
       } = { ...current, priority: input.priority };
-      await this.notify(c, type, id, actor.profileId, 'escalated');
+      // An escalation is actionable for the employee's manager, not a duplicate alert to the
+      // employee who just raised it. An employee without an active manager can still escalate;
+      // the immutable event/audit trail remains available to an administrator.
+      const managerProfileId = await this.manager(c, actor.profileId);
+      if (managerProfileId) await this.notify(c, type, id, managerProfileId, 'escalated');
       await this.audit(c, actor.userId, 'customer_work.escalated', type, id, correlationId, {
         priority: input.priority,
       });
@@ -325,7 +329,7 @@ export class PostgresCustomerWorkRoutingRepository implements CustomerWorkRoutin
   ) {
     if (t === 'communication_call')
       await c.query(
-        "UPDATE communication_calls SET assigned_employee_profile_id=$2,claimed_by_employee_profile_id=NULL,priority=$3,follow_up_status=CASE WHEN $2 IS NULL THEN 'required' WHEN follow_up_status='completed' THEN 'required' ELSE 'claimed' END,updated_at=now() WHERE id=$1",
+        "UPDATE communication_calls SET assigned_employee_profile_id=$2::uuid,claimed_by_employee_profile_id=NULL,priority=$3,follow_up_status=CASE WHEN $2::uuid IS NULL THEN 'required' WHEN follow_up_status='completed' THEN 'required' ELSE 'claimed' END,updated_at=now() WHERE id=$1",
         [id, e, p],
       );
     else await c.query('UPDATE jobs SET employee_profile_id=$2 WHERE id=$1', [id, e]);
@@ -371,6 +375,20 @@ export class PostgresCustomerWorkRoutingRepository implements CustomerWorkRoutin
       [t, id, e, type],
     );
   }
+  private async manager(c: Client, employeeProfileId: string) {
+    const result = await c.query<{ manager_employee_profile_id: string }>(
+      `SELECT manager_employee_profile_id
+       FROM employee_assignments
+       WHERE employee_profile_id=$1
+         AND manager_employee_profile_id IS NOT NULL
+         AND effective_from<=now()
+         AND (effective_to IS NULL OR effective_to>now())
+       ORDER BY effective_from DESC
+       LIMIT 1`,
+      [employeeProfileId],
+    );
+    return result.rows[0]?.manager_employee_profile_id ?? null;
+  }
   private async prior<T>(c: Client, u: string, k: string) {
     const r = await c.query<{
       id: string;
@@ -384,6 +402,7 @@ export class PostgresCustomerWorkRoutingRepository implements CustomerWorkRoutin
     );
     const row = r.rows[0];
     if (!row) return null;
+    if (row.action === 'completed') return { completed: true } as T;
     return {
       id: row.id,
       workType: row.work_type,

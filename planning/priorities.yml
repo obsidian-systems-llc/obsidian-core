@@ -310,7 +310,7 @@ priorities:
       Created by CORE-026 to turn the repository security baseline into executable API perimeter controls.
   - id: CORE-029
     title: Admin operations tree and customer communication routing
-    status: in_progress
+    status: done
     priority: 28
     dependencies: [CORE-005, CORE-006, CORE-007, CORE-008, CORE-028, CORE-037, CORE-038]
     acceptance_criteria:
@@ -359,7 +359,7 @@ priorities:
       - Notifications represent actionable customer work and do not disclose restricted customer data beyond the recipient's scope
   - id: CORE-029-05
     title: Admin operations contract and readiness audit
-    status: proposed
+    status: done
     priority: 28.05
     dependencies: [CORE-029-01, CORE-029-02, CORE-029-03, CORE-029-04]
     acceptance_criteria:

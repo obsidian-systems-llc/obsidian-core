@@ -48,4 +48,33 @@ describe('customer work routing API', () => {
     await denied.close();
     expect(r.statusCode).toBe(403);
   });
+  it('requires configured step-up authentication for company-wide routing', async () => {
+    const secured = buildApp({
+      customerWorkRoutingRepository: repository,
+      authorizer: { authorize: async (_s, r) => ({ ...r, allowed: true }) },
+      apiSecurity: {
+        allowedOrigins: [],
+        sensitiveRateLimitMax: 20,
+        sensitiveRateLimitWindowMs: 60_000,
+        stepUpClaim: 'https://obsidian-systems.tech/amr',
+        stepUpValue: 'mfa',
+      },
+      verifyToken: async () => ({ sub: 'auth0|admin' }),
+    });
+    const payload = {
+      employeeProfileId: '22222222-2222-4222-8222-222222222222',
+      priority: 'high',
+      reason: 'Company-wide assignment',
+      idempotencyKey: '33333333-3333-4333-8333-333333333334',
+    };
+    const denied = await secured.inject({
+      method: 'POST',
+      url: '/v1/core-admin/customer-work/repair_job/11111111-1111-4111-8111-111111111111/route',
+      headers: { authorization: 'Bearer t' },
+      payload,
+    });
+    await secured.close();
+    expect(denied.statusCode).toBe(403);
+    expect(denied.json()).toMatchObject({ error: { code: 'STEP_UP_REQUIRED' } });
+  });
 });

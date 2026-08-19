@@ -79,7 +79,7 @@ permission, and `400` with a stable route-specific `INVALID_*` code for invalid 
 | POST | `/v1/employee-portal/customer-work/:type/:id/route` | `employee-portal` + `customer.work.route` | Routes customer work to an employee within the manager's active scope. |
 | POST | `/v1/employee-portal/customer-work/:type/:id/escalate` | `employee-portal` + `customer.work.escalate` | Escalates work owned by the caller to high or urgent priority. |
 | POST | `/v1/employee-portal/customer-work/:type/:id/complete` | `employee-portal` + `customer.work.complete` | Completes the caller's routing/follow-up work. |
-| POST | `/v1/core-admin/customer-work/:type/:id/route` | `core-admin` + `customer.work.manage` | Routes customer work company-wide. |
+| POST | `/v1/core-admin/customer-work/:type/:id/route` | `core-admin` + `customer.work.manage`, step-up | Routes customer work company-wide. |
 | GET | `/v1/customer-portal/profile` | `customer-portal` + `customer.profile.read` | Returns the caller's customer profile. |
 | POST | `/v1/customer-portal/registration` | Authenticated Auth0 user | Creates the caller's encrypted Core customer profile and least-privilege portal access. |
 | PUT | `/v1/customer-portal/profile` | `customer-portal` + `customer.profile.write` | Replaces the caller's encrypted Core profile with an idempotent revision. |
@@ -165,9 +165,12 @@ Customer work uses `communication_call` or `repair_job` as `:type`. Routing requ
 `{ employeeProfileId|null, priority, reason, idempotencyKey }`; a `null` employee unassigns work.
 Manager routes require `customer.work.route` and can target only direct reports or employees sharing
 the caller's active store/department assignment. Core Admin `customer.work.manage` routes are
-company-wide. Escalation accepts `{ priority: "high"|"urgent", reason, idempotencyKey }` and is
-limited to the currently assigned employee. Completion accepts `{ reason, idempotencyKey }`; for
-calls it finishes the Core follow-up, while repair-job completion finishes only its routing task.
+company-wide and require step-up authentication. Escalation accepts `{ priority: "high"|"urgent",
+reason, idempotencyKey }` and is limited to the currently assigned employee; it creates an actionable
+safe notification for the employee's current manager when one exists. Completion accepts `{ reason,
+idempotencyKey }`; for calls it finishes the Core follow-up, while repair-job completion finishes only
+its routing task. A duplicate completion key returns the original completed result without a second
+event or audit record.
 
 Core appends an immutable routing event and creates safe actionable notifications containing only a
 work type and Core ID. Invalid requests return `400 INVALID_CUSTOMER_WORK_*`; inaccessible target
@@ -231,6 +234,14 @@ never call the database directly or reimplement Core authorization, pricing, com
 or subscription rules.
 
 ### API integration contract
+
+The complete machine-readable administrative/routing client contract is
+[`docs/api/admin-operations.contract.json`](docs/api/admin-operations.contract.json). It records every
+CORE-029 route's authorization, request shape, response intent, and stable failure codes and is the
+integration handoff for dashboard/client teams. The accompanying
+[`docs/admin-operations-readiness.md`](docs/admin-operations-readiness.md) records the security,
+scope, audit, migration, and database-validation boundary. A general generated-client pipeline remains
+future contract tooling; clients must not infer behavior beyond the documented contract.
 
 All timestamps are ISO-8601 UTC timestamps. IDs and idempotency keys are UUIDs. Monetary values and
 other potentially large integer values are decimal strings in responses and must never be converted
