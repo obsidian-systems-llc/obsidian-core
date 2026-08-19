@@ -1,9 +1,18 @@
 import { randomUUID } from 'node:crypto';
 import type { JWTPayload } from 'jose';
-import Fastify, { type FastifyInstance } from 'fastify';
+import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { createAuthenticationGuard, type TokenVerifier } from './authentication.js';
 import { createAuthorizationGuard, type Authorizer } from './authorization.js';
+import {
+  AuthorizationAdministrationError,
+  assignRoleSchema,
+  createRoleSchema,
+  grantEntitlementSchema,
+  replaceRolePermissionsSchema,
+  revokeAuthorizationSchema,
+  type AuthorizationAdminRepository,
+} from './authorization-admin.js';
 import { checkDatabase } from './health.js';
 import type { OrganizationRepository } from './organizations.js';
 import {
@@ -84,6 +93,7 @@ declare module 'fastify' {
 export type BuildAppOptions = {
   databaseUrl?: string;
   authorizer?: Authorizer;
+  authorizationAdminRepository?: AuthorizationAdminRepository;
   organizationRepository?: OrganizationRepository;
   customerRepository?: CustomerRepository;
   employeeRepository?: EmployeeRepository;
@@ -110,6 +120,7 @@ export type BuildAppOptions = {
 export function buildApp({
   databaseUrl,
   authorizer,
+  authorizationAdminRepository,
   organizationRepository,
   customerRepository,
   employeeRepository,
@@ -613,6 +624,190 @@ export function buildApp({
         },
         async () => ({ status: 'authorized' }),
       );
+      if (authorizationAdminRepository) {
+        const authorizationManagementGuards = [
+          authenticate,
+          async (request: FastifyRequest, reply: FastifyReply) => {
+            if (
+              !security?.stepUpClaim ||
+              !security.stepUpValue ||
+              hasStepUpAuthentication(request.auth!, security)
+            )
+              return;
+            return reply.code(403).send({
+              error: { code: 'STEP_UP_REQUIRED', message: 'Step-up authentication is required.' },
+            });
+          },
+          createAuthorizationGuard(authorizer, {
+            applicationKey: 'core-admin',
+            permissionKey: 'authorization.manage',
+          }),
+        ];
+        const inputError = (reply: FastifyReply, code: string) =>
+          reply
+            .code(400)
+            .send({ error: { code, message: 'Authorization administration input is invalid.' } });
+        app.get(
+          '/v1/core-admin/authorization/roles',
+          { preHandler: authorizationManagementGuards },
+          async () => authorizationAdminRepository.listRoles(),
+        );
+        app.post(
+          '/v1/core-admin/authorization/roles',
+          { preHandler: authorizationManagementGuards },
+          async (request, reply) => {
+            const input = createRoleSchema.safeParse(request.body);
+            if (!input.success) return inputError(reply, 'INVALID_AUTHORIZATION_ROLE');
+            try {
+              const role = await authorizationAdminRepository.createRole(
+                request.auth!.sub!,
+                input.data,
+                String(request.headers['x-correlation-id'] ?? randomUUID()),
+              );
+              return (
+                role ??
+                reply.code(404).send({
+                  error: {
+                    code: 'AUTHORIZATION_ACTOR_NOT_FOUND',
+                    message: 'Authorization actor was not found.',
+                  },
+                })
+              );
+            } catch (error) {
+              if (error instanceof AuthorizationAdministrationError)
+                return reply
+                  .code(409)
+                  .send({ error: { code: 'AUTHORIZATION_ROLE_CONFLICT', message: error.message } });
+              throw error;
+            }
+          },
+        );
+        app.put(
+          '/v1/core-admin/authorization/roles/:id/permissions',
+          { preHandler: authorizationManagementGuards },
+          async (request, reply) => {
+            const id = (request.params as { id: string }).id;
+            const input = replaceRolePermissionsSchema.safeParse(request.body);
+            if (!zUuid(id) || !input.success)
+              return inputError(reply, 'INVALID_AUTHORIZATION_ROLE_PERMISSIONS');
+            try {
+              const role = await authorizationAdminRepository.replaceRolePermissions(
+                request.auth!.sub!,
+                id,
+                input.data,
+                String(request.headers['x-correlation-id'] ?? randomUUID()),
+              );
+              if (role === 'protected')
+                return reply.code(409).send({
+                  error: {
+                    code: 'PROTECTED_AUTHORIZATION_ROLE',
+                    message: 'The protected Super Admin role cannot be changed through this route.',
+                  },
+                });
+              return (
+                role ??
+                reply.code(404).send({
+                  error: { code: 'AUTHORIZATION_ROLE_NOT_FOUND', message: 'Role not found.' },
+                })
+              );
+            } catch (error) {
+              if (error instanceof AuthorizationAdministrationError)
+                return reply
+                  .code(409)
+                  .send({ error: { code: 'AUTHORIZATION_ROLE_CONFLICT', message: error.message } });
+              throw error;
+            }
+          },
+        );
+        app.post(
+          '/v1/core-admin/authorization/role-assignments',
+          { preHandler: authorizationManagementGuards },
+          async (request, reply) => {
+            const input = assignRoleSchema.safeParse(request.body);
+            if (!input.success) return inputError(reply, 'INVALID_ROLE_ASSIGNMENT');
+            const result = await authorizationAdminRepository.assignRole(
+              request.auth!.sub!,
+              input.data,
+              String(request.headers['x-correlation-id'] ?? randomUUID()),
+            );
+            if (result === 'self_assignment')
+              return reply.code(409).send({
+                error: {
+                  code: 'SELF_ACCESS_CHANGE_FORBIDDEN',
+                  message: 'Administrators cannot change their own access.',
+                },
+              });
+            return (
+              result ??
+              reply.code(404).send({
+                error: {
+                  code: 'AUTHORIZATION_TARGET_NOT_FOUND',
+                  message: 'User or role not found.',
+                },
+              })
+            );
+          },
+        );
+        app.post(
+          '/v1/core-admin/authorization/entitlements',
+          { preHandler: authorizationManagementGuards },
+          async (request, reply) => {
+            const input = grantEntitlementSchema.safeParse(request.body);
+            if (!input.success) return inputError(reply, 'INVALID_APPLICATION_ENTITLEMENT');
+            const result = await authorizationAdminRepository.grantEntitlement(
+              request.auth!.sub!,
+              input.data,
+              String(request.headers['x-correlation-id'] ?? randomUUID()),
+            );
+            if (result === 'self_assignment')
+              return reply.code(409).send({
+                error: {
+                  code: 'SELF_ACCESS_CHANGE_FORBIDDEN',
+                  message: 'Administrators cannot change their own access.',
+                },
+              });
+            return (
+              result ??
+              reply.code(404).send({
+                error: {
+                  code: 'AUTHORIZATION_TARGET_NOT_FOUND',
+                  message: 'User or application not found.',
+                },
+              })
+            );
+          },
+        );
+        const revoke = (route: string, method: 'revokeRoleAssignment' | 'revokeEntitlement') =>
+          app.post(route, { preHandler: authorizationManagementGuards }, async (request, reply) => {
+            const id = (request.params as { id: string }).id;
+            const input = revokeAuthorizationSchema.safeParse(request.body);
+            if (!zUuid(id) || !input.success)
+              return inputError(reply, 'INVALID_AUTHORIZATION_REVOCATION');
+            const result = await authorizationAdminRepository[method](
+              request.auth!.sub!,
+              id,
+              input.data,
+              String(request.headers['x-correlation-id'] ?? randomUUID()),
+            );
+            if (result === 'self_assignment')
+              return reply.code(409).send({
+                error: {
+                  code: 'SELF_ACCESS_CHANGE_FORBIDDEN',
+                  message: 'Administrators cannot change their own access.',
+                },
+              });
+            return result
+              ? { status: 'revoked' }
+              : reply.code(404).send({
+                  error: {
+                    code: 'AUTHORIZATION_ASSIGNMENT_NOT_FOUND',
+                    message: 'Active assignment not found.',
+                  },
+                });
+          });
+        revoke('/v1/core-admin/authorization/role-assignments/:id/revoke', 'revokeRoleAssignment');
+        revoke('/v1/core-admin/authorization/entitlements/:id/revoke', 'revokeEntitlement');
+      }
       if (organizationRepository) {
         app.get(
           '/v1/core-admin/organization-hierarchy',

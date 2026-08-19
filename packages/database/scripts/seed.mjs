@@ -56,6 +56,7 @@ try {
   const permissionIds = [];
   for (const permissionDefinition of [
     ['authorization.read', 'Read authorization'],
+    ['authorization.manage', 'Manage authorization'],
     ['organization.read', 'Read organization hierarchy'],
   ]) {
     const permission = await client.query(

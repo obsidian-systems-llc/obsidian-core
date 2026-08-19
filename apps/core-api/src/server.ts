@@ -3,6 +3,7 @@ import 'dotenv/config';
 import { buildApp } from './app.js';
 import { createAuth0TokenVerifier, loadAuth0Config } from './auth0.js';
 import { PostgresAuthorizer } from './authorization.js';
+import { PostgresAuthorizationAdminRepository } from './authorization-admin.js';
 import { loadEnvironment } from './env.js';
 import { PostgresOrganizationRepository } from './organizations.js';
 import { loadFieldEncryptor } from './encryption.js';
@@ -64,6 +65,7 @@ const squareWebhookRepository =
 const app = buildApp({
   databaseUrl: environment.DATABASE_URL,
   authorizer: new PostgresAuthorizer(environment.DATABASE_URL),
+  authorizationAdminRepository: new PostgresAuthorizationAdminRepository(environment.DATABASE_URL),
   organizationRepository: new PostgresOrganizationRepository(environment.DATABASE_URL),
   customerRepository: new PostgresCustomerRepository(environment.DATABASE_URL, fieldEncryptor),
   employeeRepository: new PostgresEmployeeRepository(environment.DATABASE_URL, fieldEncryptor),

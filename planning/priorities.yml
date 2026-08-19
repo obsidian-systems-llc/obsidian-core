@@ -320,12 +320,51 @@ priorities:
       - Sensitive customer and employee writes preserve encryption, effective dates, idempotency, resource-level authorization, and audit history; customer-facing applications can read the linked repair status without receiving internal-only data
       - Every administrative and routing API is documented in the README integration reference and covered by allowed, denied, duplicate, and real-database tests
     implementation_notes: >-
-      This is the current operational priority. Build the backend tree for customer communication and
-      repair handling first: authorization administration, employee/manager assignment, administrative
-      customer and repair management, and communication routing. Keep payroll export work (CORE-020),
-      payment-provider-dependent work, and uncontrolled outbound campaigns deferred. Split any
-      independently deployable area discovered during implementation into a proposed follow-up rather
-      than leaving business rules to dashboard applications.
+      This parent priority is completed only after stages CORE-029-01 through CORE-029-05. Payroll
+      export work (CORE-020), payment-provider-dependent work, and uncontrolled outbound campaigns
+      remain deferred. Split independently deployable discoveries into proposed follow-up priorities
+      rather than leaving business rules to dashboard applications.
+  - id: CORE-029-01
+    title: Admin access-governance tree
+    status: done
+    priority: 28.01
+    dependencies: [CORE-005, CORE-028]
+    acceptance_criteria:
+      - Step-up-authenticated Core administrators can create and manage application-scoped roles, role permissions, effective-dated user role assignments, and application entitlements through audited APIs
+      - Role, permission, and application-access changes require explicit `authorization.manage`, verified step-up authentication, idempotency, audit history, and self-access changes are forbidden
+      - The Core-admin, employee-portal, executive-panel, and customer-portal boundaries remain default-deny and their administrative contracts have allowed, denied, duplicate, and expiry coverage
+  - id: CORE-029-02
+    title: Employee, manager, and organizational administration
+    status: proposed
+    priority: 28.02
+    dependencies: [CORE-029-01, CORE-006, CORE-008]
+    acceptance_criteria:
+      - Authorized administrators manage encrypted employee lifecycle data and effective-dated store, department, and manager assignments
+      - Managers can access only the employees and work routed within their active organizational scope
+  - id: CORE-029-03
+    title: Customer and repair administration
+    status: proposed
+    priority: 28.03
+    dependencies: [CORE-029-01, CORE-007, CORE-010]
+    acceptance_criteria:
+      - Authorized staff can create and update customer records and link, relink, or remove the customer association of a repair with immutable audit history
+      - Customer portals expose linked repair status without revealing employee-only notes or operational data
+  - id: CORE-029-04
+    title: Customer communication routing and escalation
+    status: proposed
+    priority: 28.04
+    dependencies: [CORE-029-01, CORE-029-02, CORE-029-03, CORE-037, CORE-038]
+    acceptance_criteria:
+      - Online repair requests and communications calls support scoped routing, manager reassignment, escalation, follow-up ownership, and auditable completion
+      - Notifications represent actionable customer work and do not disclose restricted customer data beyond the recipient's scope
+  - id: CORE-029-05
+    title: Admin operations contract and readiness audit
+    status: proposed
+    priority: 28.05
+    dependencies: [CORE-029-01, CORE-029-02, CORE-029-03, CORE-029-04]
+    acceptance_criteria:
+      - The README and generated client contract document every administrative and routing route, authorization rule, request, response, and failure code
+      - End-to-end authorization, tenancy/scope, audit, migration, and repair-visibility tests validate the complete operations tree
   - id: CORE-030
     title: Quote approval, customer acceptance, and revision workflows
     status: proposed
@@ -359,13 +398,16 @@ priorities:
       verification are available. After CORE-032 is done, return to CORE-018 and review CORE-019,
       CORE-021, and CORE-022 for their provider-dependent finalization work.
   - id: CORE-033
-    title: Authorization administration and access-governance workflows
+    title: Authorization administration and access-governance workflows (superseded by CORE-029-01)
     status: proposed
     priority: 32
     dependencies: [CORE-005, CORE-028]
     acceptance_criteria:
       - Authorized administrators can manage roles, permissions, and entitlements through audited, effective-dated APIs
       - Role and entitlement changes require step-up authentication where configured and cannot grant unchecked access
+    implementation_notes: >-
+      Consolidated into CORE-029-01 so access administration is delivered as the foundation of the
+      broader admin operations tree rather than as a disconnected integration.
   - id: CORE-034
     title: Versioned API contract and generated-client pipeline
     status: proposed

@@ -54,6 +54,13 @@ permission, and `400` with a stable route-specific `INVALID_*` code for invalid 
 | GET | `/ready` | Public | Database readiness. |
 | GET | `/v1/identity/me` | Authenticated | Returns the Auth0 subject recognized by Core. |
 | GET | `/v1/core-admin/authorization/access` | `core-admin` + `authorization.read` | Verifies Core Admin access. |
+| GET | `/v1/core-admin/authorization/roles` | `core-admin` + `authorization.manage`, step-up | Lists active application roles and permissions. |
+| POST | `/v1/core-admin/authorization/roles` | `core-admin` + `authorization.manage`, step-up | Creates or reactivates an application-scoped role. |
+| PUT | `/v1/core-admin/authorization/roles/:id/permissions` | `core-admin` + `authorization.manage`, step-up | Replaces a non-protected role's permissions with an auditable revision. |
+| POST | `/v1/core-admin/authorization/role-assignments` | `core-admin` + `authorization.manage`, step-up | Creates an effective-dated user-role assignment. |
+| POST | `/v1/core-admin/authorization/entitlements` | `core-admin` + `authorization.manage`, step-up | Creates an effective-dated application entitlement. |
+| POST | `/v1/core-admin/authorization/role-assignments/:id/revoke` | `core-admin` + `authorization.manage`, step-up | Ends an active role assignment with an auditable reason. |
+| POST | `/v1/core-admin/authorization/entitlements/:id/revoke` | `core-admin` + `authorization.manage`, step-up | Ends an active application entitlement with an auditable reason. |
 | GET | `/v1/core-admin/organization-hierarchy` | `core-admin` + `organization.read` | Returns active organization hierarchy. |
 | GET | `/v1/customer-portal/profile` | `customer-portal` + `customer.profile.read` | Returns the caller's customer profile. |
 | POST | `/v1/customer-portal/registration` | Authenticated Auth0 user | Creates the caller's encrypted Core customer profile and least-privilege portal access. |
@@ -80,6 +87,16 @@ permission, and `400` with a stable route-specific `INVALID_*` code for invalid 
 | POST | `/v1/employee-portal/communications/calls/:id/do-not-call` | `employee-portal` + `communication.dnc.manage` | Records an auditable Core-managed do-not-call suppression. |
 | GET | `/v1/core-admin/communications/calls` | `core-admin` + `communication.call.manage` | Lists company-wide communications calls. |
 | PUT | `/v1/core-admin/communications/calls/:id/assignment` | `core-admin` + `communication.call.manage` | Assigns, reassigns, or unassigns a call. |
+
+### Authorization administration
+
+These high-risk Core Admin routes require a verified configured step-up claim as well as the
+`authorization.manage` permission. Role, assignment, and entitlement writes require an
+idempotency key; effective dates are stored in UTC. A caller cannot modify their own roles or
+entitlements through these routes, and the protected `core-admin` Super Admin role cannot be
+changed through the ordinary permission-replacement endpoint. Invalid bodies return the relevant
+`INVALID_AUTHORIZATION_*` error; unavailable users, roles, or applications return a generic
+`AUTHORIZATION_TARGET_NOT_FOUND` or `AUTHORIZATION_ROLE_NOT_FOUND` response.
 
 ### Retell communications integration
 
