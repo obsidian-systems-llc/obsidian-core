@@ -58,6 +58,8 @@ try {
     ['authorization.read', 'Read authorization'],
     ['authorization.manage', 'Manage authorization'],
     ['employee.manage', 'Manage employee lifecycle and assignments'],
+    ['customer.manage', 'Manage customer profiles'],
+    ['repair.customer.manage', 'Manage repair customer associations'],
     ['organization.read', 'Read organization hierarchy'],
   ]) {
     const permission = await client.query(

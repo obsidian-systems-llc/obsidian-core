@@ -343,7 +343,7 @@ priorities:
       - Managers can access only the employees and work routed within their active organizational scope
   - id: CORE-029-03
     title: Customer and repair administration
-    status: proposed
+    status: done
     priority: 28.03
     dependencies: [CORE-029-01, CORE-007, CORE-010]
     acceptance_criteria:

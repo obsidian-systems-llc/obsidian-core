@@ -26,6 +26,13 @@ import {
 } from './customers.js';
 import type { EmployeeRepository } from './employees.js';
 import {
+  createAdminCustomerSchema,
+  customerRepairPageSchema,
+  repairCustomerAssociationSchema,
+  updateAdminCustomerSchema,
+  type CustomerAdministrationRepository,
+} from './customer-admin.js';
+import {
   createEmployeeAssignmentSchema,
   createEmployeeSchema,
   employeeLifecycleSchema,
@@ -105,6 +112,7 @@ export type BuildAppOptions = {
   authorizationAdminRepository?: AuthorizationAdminRepository;
   organizationRepository?: OrganizationRepository;
   customerRepository?: CustomerRepository;
+  customerAdministrationRepository?: CustomerAdministrationRepository;
   employeeRepository?: EmployeeRepository;
   employeeAdministrationRepository?: EmployeeAdministrationRepository;
   timekeepingRepository?: TimekeepingRepository;
@@ -133,6 +141,7 @@ export function buildApp({
   authorizationAdminRepository,
   organizationRepository,
   customerRepository,
+  customerAdministrationRepository,
   employeeRepository,
   employeeAdministrationRepository,
   timekeepingRepository,
@@ -1031,6 +1040,151 @@ export function buildApp({
                 nextOffset: result.nextOffset,
               },
             };
+          },
+        );
+      }
+      if (customerAdministrationRepository) {
+        const customerAdministrationGuards = (permissionKey: string) => [
+          authenticate,
+          async (request: FastifyRequest, reply: FastifyReply) => {
+            if (
+              !security?.stepUpClaim ||
+              !security.stepUpValue ||
+              hasStepUpAuthentication(request.auth!, security)
+            )
+              return;
+            return reply.code(403).send({
+              error: { code: 'STEP_UP_REQUIRED', message: 'Step-up authentication is required.' },
+            });
+          },
+          createAuthorizationGuard(authorizer, { applicationKey: 'core-admin', permissionKey }),
+        ];
+        const customerInputError = (reply: FastifyReply, code: string) =>
+          reply
+            .code(400)
+            .send({ error: { code, message: 'Customer administration input is invalid.' } });
+        app.post(
+          '/v1/core-admin/customers',
+          { preHandler: customerAdministrationGuards('customer.manage') },
+          async (request, reply) => {
+            const input = createAdminCustomerSchema.safeParse(request.body);
+            if (!input.success) return customerInputError(reply, 'INVALID_ADMIN_CUSTOMER_CREATE');
+            return (
+              (await customerAdministrationRepository.create(
+                request.auth!.sub!,
+                input.data,
+                String(request.headers['x-correlation-id'] ?? randomUUID()),
+              )) ??
+              reply.code(404).send({
+                error: {
+                  code: 'CUSTOMER_ADMIN_ACTOR_NOT_FOUND',
+                  message: 'Active Core actor not found.',
+                },
+              })
+            );
+          },
+        );
+        app.get(
+          '/v1/core-admin/customers/:id',
+          { preHandler: customerAdministrationGuards('customer.manage') },
+          async (request, reply) => {
+            const id = (request.params as { id: string }).id;
+            if (!zUuid(id)) return customerInputError(reply, 'INVALID_ADMIN_CUSTOMER_ID');
+            return (
+              (await customerAdministrationRepository.get(id)) ??
+              reply
+                .code(404)
+                .send({ error: { code: 'CUSTOMER_NOT_FOUND', message: 'Customer not found.' } })
+            );
+          },
+        );
+        app.put(
+          '/v1/core-admin/customers/:id',
+          { preHandler: customerAdministrationGuards('customer.manage') },
+          async (request, reply) => {
+            const id = (request.params as { id: string }).id;
+            const input = updateAdminCustomerSchema.safeParse(request.body);
+            if (!zUuid(id) || !input.success)
+              return customerInputError(reply, 'INVALID_ADMIN_CUSTOMER_UPDATE');
+            return (
+              (await customerAdministrationRepository.update(
+                request.auth!.sub!,
+                id,
+                input.data,
+                String(request.headers['x-correlation-id'] ?? randomUUID()),
+              )) ??
+              reply.code(404).send({
+                error: { code: 'CUSTOMER_NOT_FOUND', message: 'Active customer not found.' },
+              })
+            );
+          },
+        );
+        app.post(
+          '/v1/core-admin/repair-jobs/:id/customer-association',
+          { preHandler: customerAdministrationGuards('repair.customer.manage') },
+          async (request, reply) => {
+            const id = (request.params as { id: string }).id;
+            const input = repairCustomerAssociationSchema.safeParse(request.body);
+            if (!zUuid(id) || !input.success)
+              return customerInputError(reply, 'INVALID_REPAIR_CUSTOMER_ASSOCIATION');
+            const result = await customerAdministrationRepository.associateRepair(
+              request.auth!.sub!,
+              id,
+              input.data,
+              String(request.headers['x-correlation-id'] ?? randomUUID()),
+            );
+            if (result === 'unchanged')
+              return reply.code(409).send({
+                error: {
+                  code: 'REPAIR_CUSTOMER_ASSOCIATION_UNCHANGED',
+                  message: 'Repair already has the requested customer association.',
+                },
+              });
+            return (
+              result ??
+              reply.code(404).send({
+                error: {
+                  code: 'REPAIR_OR_CUSTOMER_NOT_FOUND',
+                  message: 'Repair or active customer not found.',
+                },
+              })
+            );
+          },
+        );
+        app.get(
+          '/v1/customer-portal/repairs',
+          {
+            preHandler: [
+              authenticate,
+              createAuthorizationGuard(authorizer, {
+                applicationKey: 'customer-portal',
+                permissionKey: 'customer.portal.read',
+              }),
+            ],
+          },
+          async (request, reply) => {
+            const page = customerRepairPageSchema.safeParse(request.query);
+            if (!page.success)
+              return customerInputError(reply, 'INVALID_CUSTOMER_REPAIR_PAGINATION');
+            const result = await customerAdministrationRepository.listPortalRepairs(
+              request.auth!.sub!,
+              page.data,
+            );
+            return result
+              ? {
+                  ...result,
+                  page: {
+                    limit: page.data.limit,
+                    offset: page.data.offset,
+                    nextOffset: result.nextOffset,
+                  },
+                }
+              : reply.code(404).send({
+                  error: {
+                    code: 'CUSTOMER_PROFILE_NOT_FOUND',
+                    message: 'Customer profile not found.',
+                  },
+                });
           },
         );
       }

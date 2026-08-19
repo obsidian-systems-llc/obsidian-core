@@ -70,6 +70,11 @@ permission, and `400` with a stable route-specific `INVALID_*` code for invalid 
 | POST | `/v1/core-admin/employee-assignments` | `core-admin` + `employee.manage`, step-up | Creates an effective-dated store, department, and optional manager assignment. |
 | POST | `/v1/core-admin/employee-assignments/:id/end` | `core-admin` + `employee.manage`, step-up | Ends an active employee assignment at a supplied effective time. |
 | GET | `/v1/employee-portal/managed-employees` | `employee-portal` + `employee.scope.read` | Lists only employees in the caller's active management scope. |
+| POST | `/v1/core-admin/customers` | `core-admin` + `customer.manage`, step-up | Creates an encrypted Core customer record without creating an Auth0 account. |
+| GET | `/v1/core-admin/customers/:id` | `core-admin` + `customer.manage`, step-up | Reads an encrypted customer profile for authorized administration. |
+| PUT | `/v1/core-admin/customers/:id` | `core-admin` + `customer.manage`, step-up | Replaces an encrypted customer profile while preserving a revision. |
+| POST | `/v1/core-admin/repair-jobs/:id/customer-association` | `core-admin` + `repair.customer.manage`, step-up | Links, relinks, or removes a repair's customer association with immutable history. |
+| GET | `/v1/customer-portal/repairs` | `customer-portal` + `customer.portal.read` | Lists the caller's linked repair status and appointment windows only. |
 | GET | `/v1/customer-portal/profile` | `customer-portal` + `customer.profile.read` | Returns the caller's customer profile. |
 | POST | `/v1/customer-portal/registration` | Authenticated Auth0 user | Creates the caller's encrypted Core customer profile and least-privilege portal access. |
 | PUT | `/v1/customer-portal/profile` | `customer-portal` + `customer.profile.write` | Replaces the caller's encrypted Core profile with an idempotent revision. |
@@ -128,6 +133,26 @@ derives scope from the caller's current employee assignments; it returns direct 
 employees sharing the caller's current store or department, never a client-specified or company-wide
 directory. The response is `{ items, nextOffset, page }`. Invalid admin input returns the documented
 `INVALID_EMPLOYEE_*` code; absent employee/scope resources return their specific `404` code.
+
+### Customer and repair administration
+
+Customer administration writes require `customer.manage`, `core-admin`, a verified step-up claim,
+and a UUID `idempotencyKey`. `POST /v1/core-admin/customers` accepts `{ profile,
+idempotencyKey }` and creates an encrypted Core record only; it deliberately does not create an
+Auth0 account or grant portal access. `PUT /v1/core-admin/customers/:id` accepts `{ profile,
+reason, idempotencyKey }`, retains an encrypted revision, and audits changed field names without
+recording profile values.
+
+`POST /v1/core-admin/repair-jobs/:id/customer-association` accepts `{ customerProfileId,
+reason, idempotencyKey }`, where `customerProfileId` may be `null` to remove the link. Core appends
+an immutable link/relink/removal event and updates the repair's current association. A no-op returns
+`409 REPAIR_CUSTOMER_ASSOCIATION_UNCHANGED`; unavailable repairs or customers return
+`404 REPAIR_OR_CUSTOMER_NOT_FOUND`.
+
+`GET /v1/customer-portal/repairs?limit=50&offset=0` is paginated and returns only `{ id, status,
+windowStart, windowEnd }` for repairs currently linked to the authenticated customer's profile.
+It excludes employee assignments, internal notes, transcripts, prices, and other employee-only
+operational data.
 
 ### Retell communications integration
 

@@ -8,6 +8,7 @@ import { loadEnvironment } from './env.js';
 import { PostgresOrganizationRepository } from './organizations.js';
 import { loadFieldEncryptor } from './encryption.js';
 import { PostgresCustomerRepository } from './customers.js';
+import { PostgresCustomerAdministrationRepository } from './customer-admin.js';
 import { PostgresEmployeeRepository } from './employees.js';
 import { PostgresEmployeeAdministrationRepository } from './employee-admin.js';
 import { PostgresTimekeepingRepository } from './timekeeping.js';
@@ -69,6 +70,10 @@ const app = buildApp({
   authorizationAdminRepository: new PostgresAuthorizationAdminRepository(environment.DATABASE_URL),
   organizationRepository: new PostgresOrganizationRepository(environment.DATABASE_URL),
   customerRepository: new PostgresCustomerRepository(environment.DATABASE_URL, fieldEncryptor),
+  customerAdministrationRepository: new PostgresCustomerAdministrationRepository(
+    environment.DATABASE_URL,
+    fieldEncryptor,
+  ),
   employeeRepository: new PostgresEmployeeRepository(environment.DATABASE_URL, fieldEncryptor),
   employeeAdministrationRepository: new PostgresEmployeeAdministrationRepository(
     environment.DATABASE_URL,
