@@ -47,6 +47,10 @@ describe.skipIf(!databaseUrl)('PostgreSQL payment repository', () => {
     if (subscriptionId)
       await client.query('DELETE FROM customer_subscriptions WHERE id=$1', [subscriptionId]);
     if (customerProfileId)
+      await client.query('DELETE FROM customer_email_deliveries WHERE customer_profile_id=$1', [
+        customerProfileId,
+      ]);
+    if (customerProfileId)
       await client.query('DELETE FROM customer_profile_memberships WHERE customer_profile_id=$1', [
         customerProfileId,
       ]);
@@ -147,6 +151,14 @@ describe.skipIf(!databaseUrl)('PostgreSQL payment repository', () => {
       balanceMinor: '1500',
       membershipActive: true,
       usable: false,
+    });
+    await expect(
+      client.query<{ event_type: string; environment: string; amount: string }>(
+        "SELECT event_type,environment,template_data->>'amountMinor' AS amount FROM customer_email_deliveries WHERE customer_profile_id=$1",
+        [customerProfileId],
+      ),
+    ).resolves.toMatchObject({
+      rows: [{ event_type: 'device_care_payment_receipt', environment: 'sandbox', amount: '1500' }],
     });
   });
 });

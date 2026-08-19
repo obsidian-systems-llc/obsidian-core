@@ -56,6 +56,9 @@ describe.skipIf(!databaseUrl)('PostgreSQL customer repository', () => {
   });
   afterAll(async () => {
     await client.query('DELETE FROM audit_events WHERE actor_user_id = $1', [userId]);
+    await client.query('DELETE FROM customer_email_deliveries WHERE customer_profile_id = $1', [
+      profileId,
+    ]);
     await client.query('DELETE FROM customer_account_closures WHERE customer_profile_id = $1', [
       profileId,
     ]);
@@ -115,6 +118,20 @@ describe.skipIf(!databaseUrl)('PostgreSQL customer repository', () => {
         [profileId],
       ),
     ).resolves.toMatchObject({ rows: [{ count: 1 }] });
+    await expect(
+      client.query<{ count: number; recipient_email: string; event_type: string }>(
+        'SELECT count(*)::int AS count, max(recipient_email) AS recipient_email, max(event_type) AS event_type FROM customer_email_deliveries WHERE customer_profile_id=$1',
+        [profileId],
+      ),
+    ).resolves.toMatchObject({
+      rows: [
+        {
+          count: 1,
+          recipient_email: `customer-${userId}@example.invalid`,
+          event_type: 'profile_updated',
+        },
+      ],
+    });
   });
   it('archives and deauthorizes a customer account after explicit closure', async () => {
     const closed = await repository.closeAccountForSubject(

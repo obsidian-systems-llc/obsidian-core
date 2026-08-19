@@ -1,6 +1,7 @@
 import { createHash, createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
 import { Client } from 'pg';
 import { z } from 'zod';
+import { queueDeviceCarePaymentReceipt } from './customer-email.js';
 import { createAuditEvent } from './audit.js';
 
 export const paymentRequestSchema = z.object({
@@ -647,6 +648,13 @@ export class PostgresPaymentRepository implements PaymentRepository {
           invoiceId: invoice.id,
           providerSubscriptionReference: invoice.subscription_id,
           ...(environment ? { environment } : {}),
+        });
+        await queueDeviceCarePaymentReceipt(client, {
+          providerEventReference: event.event_id,
+          providerInvoiceReference: invoice.id,
+          providerSubscriptionReference: invoice.subscription_id,
+          environment: environment ?? 'production',
+          paidAt: event.created_at ?? new Date().toISOString(),
         });
       }
       await client.query(

@@ -1,5 +1,6 @@
 import { Client } from 'pg';
 import { z } from 'zod';
+import { queueCustomerProfileUpdatedEmail } from './customer-email.js';
 import type { FieldEncryptor } from './encryption.js';
 import { createAuditEvent } from './audit.js';
 
@@ -309,7 +310,7 @@ export class PostgresCustomerRepository implements CustomerRepository {
         `UPDATE customer_profiles SET ciphertext=$2,iv=$3,auth_tag=$4,key_id=$5,updated_at=now() WHERE id=$1`,
         [owner.profileId, encrypted.ciphertext, encrypted.iv, encrypted.authTag, encrypted.keyId],
       );
-      await client.query<EncryptedRow>(
+      const revision = await client.query<EncryptedRow>(
         `INSERT INTO customer_profile_revisions (customer_profile_id,actor_user_id,ciphertext,iv,auth_tag,key_id,idempotency_key)
          VALUES ($1,$2,$3,$4,$5,$6,$7)
          RETURNING id,ciphertext,iv,auth_tag,key_id,NULL::text AS label`,
@@ -339,6 +340,12 @@ export class PostgresCustomerRepository implements CustomerRepository {
           changedFields,
         },
       );
+      await queueCustomerProfileUpdatedEmail(client, {
+        customerProfileId: owner.profileId,
+        recipientUserId: owner.userId,
+        eventKey: revision.rows[0]!.id,
+        changedFieldNames: changedFields,
+      });
       await client.query('COMMIT');
       return this.getForSubject(subject);
     } catch (error) {

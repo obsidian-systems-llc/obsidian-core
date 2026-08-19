@@ -449,8 +449,8 @@ export class PostgresDeviceCareRepository implements DeviceCareRepository {
       });
       await client.query('BEGIN');
       const result = await client.query<DeviceCareEnrollment>(
-        `INSERT INTO customer_subscriptions (customer_profile_id,subscription_plan_version_id,status,provider_subscription_reference,started_at,renewal_at,provider,provider_environment,customer_payment_method_id,enrollment_idempotency_key,provider_version)
-         VALUES ($1,$2,$3,$4,now(),$5,'square',$6,$7,$8,$9)
+        `INSERT INTO customer_subscriptions (customer_profile_id,subscription_plan_version_id,status,provider_subscription_reference,started_at,renewal_at,provider,provider_environment,customer_payment_method_id,enrollment_idempotency_key,provider_version,billing_user_id)
+         VALUES ($1,$2,$3,$4,now(),$5,'square',$6,$7,$8,$9,$10)
          ON CONFLICT (customer_profile_id,enrollment_idempotency_key) WHERE enrollment_idempotency_key IS NOT NULL DO NOTHING
          RETURNING id,provider_subscription_reference AS "providerSubscriptionReference",renewal_at AS "renewalAt",status`,
         [
@@ -463,6 +463,7 @@ export class PostgresDeviceCareRepository implements DeviceCareRepository {
           input.paymentMethodId,
           input.idempotencyKey,
           providerSubscription.version?.toString() ?? null,
+          customer.userId,
         ],
       );
       await this.audit(

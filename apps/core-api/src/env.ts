@@ -30,6 +30,23 @@ const environmentSchema = z.object({
     .transform((value) => value === 'true'),
   RETELL_API_KEY: z.string().min(1).optional(),
   RETELL_WEBHOOK_SECRET: z.string().min(1).optional(),
+  CUSTOMER_EMAIL_ENABLED: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((value) => value === 'true'),
+  RESEND_API_KEY: z.string().min(1).optional(),
+  RESEND_FROM_EMAIL: z.string().min(3).optional(),
+  RESEND_REPLY_TO: z.string().email().optional(),
+  CUSTOMER_EMAIL_SEND_SANDBOX: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((value) => value === 'true'),
+  CUSTOMER_EMAIL_DELIVERY_POLL_INTERVAL_MS: z.coerce
+    .number()
+    .int()
+    .min(10_000)
+    .max(3_600_000)
+    .default(60_000),
 });
 
 export type Environment = z.infer<typeof environmentSchema>;
@@ -41,6 +58,13 @@ export function loadEnvironment(source: NodeJS.ProcessEnv = process.env): Enviro
   const environment = result.data;
   if (environment.RETELL_ENABLED && !environment.RETELL_API_KEY)
     throw new Error('RETELL_API_KEY is required when RETELL_ENABLED=true.');
+  if (
+    environment.CUSTOMER_EMAIL_ENABLED &&
+    (!environment.RESEND_API_KEY || !environment.RESEND_FROM_EMAIL)
+  )
+    throw new Error(
+      'RESEND_API_KEY and RESEND_FROM_EMAIL are required when CUSTOMER_EMAIL_ENABLED=true.',
+    );
   const origins =
     environment.API_ALLOWED_ORIGINS?.split(',')
       .map((origin) => origin.trim())

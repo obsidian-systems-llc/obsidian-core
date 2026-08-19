@@ -422,6 +422,9 @@ button; `403 FORBIDDEN` is authoritative.
 | `PAYMENT_PROCESSOR` | No | Payment-provider selector: `square`, `worldpay`, or `commerce360`. `commerce360` is normalized to the Access Worldpay adapter configuration. Default: `square`. |
 | `SQUARE_*` | Required when `PAYMENTS_ENABLED=true` and Square is selected | Server-only access token, application/location IDs, API version, exact webhook notification URL, and webhook signature key. |
 | `RETELL_ENABLED`, `RETELL_API_KEY`, `RETELL_WEBHOOK_SECRET` | Retell is opt-in; API key required when enabled | Server-only Retell integration configuration. Retell's current webhook signature uses its designated webhook API key; the optional secret is reserved only for a separate provider-issued value. |
+| `CUSTOMER_EMAIL_ENABLED` | No, default `false` | Explicit server-side opt-in for Resend transactional customer mail. When `true`, `RESEND_API_KEY` and `RESEND_FROM_EMAIL` are required. |
+| `RESEND_API_KEY`, `RESEND_FROM_EMAIL`, `RESEND_REPLY_TO` | Required/optional when customer email is enabled | Resend API credential, verified sender identity, and optional reply-to mailbox. These values stay in managed server secret storage and never reach a GUI. |
+| `CUSTOMER_EMAIL_SEND_SANDBOX`, `CUSTOMER_EMAIL_DELIVERY_POLL_INTERVAL_MS` | No | Sandbox receipts are suppressed by default; set the first to `true` only for intentional sandbox-mail testing. The interval controls the server's durable-outbox delivery poll and defaults to 60 seconds. |
 | `WORLDPAY_*` | Reserved, disabled | Commerce360/Access Worldpay configuration; processing is deliberately blocked pending provider-issued values and verification. |
 
 Production deployment must use managed secret storage, HTTPS termination, a backed-up PostgreSQL
@@ -429,6 +432,25 @@ service, a shared rate-limit store when multiple Core instances run, centralized
 an externally monitored readiness endpoint. Core currently has no automatic production deployment,
 background worker, hosted object storage, webhook receiver, or provider connection; those are
 separate documented priorities rather than hidden assumptions.
+
+### Customer transactional email setup
+
+To activate customer receipts and account-change confirmations, add and verify an owned sending domain
+in Resend. `updates.obsidian-systems.tech` is the recommended transactional subdomain; publish the
+DNS records Resend supplies, wait for verification, and then configure Render with:
+
+```text
+CUSTOMER_EMAIL_ENABLED=true
+RESEND_API_KEY=re_...
+RESEND_FROM_EMAIL=Obsidian Systems <receipts@updates.obsidian-systems.tech>
+RESEND_REPLY_TO=support@obsidian-systems.tech
+CUSTOMER_EMAIL_SEND_SANDBOX=false
+```
+
+Redeploy Core after setting the secrets. The sender must use the verified domain. Keep sandbox sending
+off in normal operation; enable it temporarily only to test sandbox subscription-receipt delivery to
+a controlled recipient. Core creates no external email API route: delivery is initiated only by its
+customer-profile update and signed payment-webhook workflows.
 
 ### Interchangeable payment-provider configuration
 
@@ -663,6 +685,16 @@ credits Device Care only on signed, replay-protected `invoice.payment_made` even
 active mapped Device Care subscription. Each provider invoice can create at most one append-only
 credit entry; the current membership-policy cap limits the credited amount. A payment-link click,
 portal response, generic payment event, or an unsigned webhook can never award credits.
+
+When customer email is explicitly enabled, the same replay-safe successful invoice event creates one
+durable **Device Care payment receipt** delivery record. The receipt uses the immutable subscribed
+plan version's integer-minor-unit amount and currency, plus the provider invoice reference and payment
+time; it does not contain card data. Resend delivery is server-only, provider-idempotent, audited, and
+retried up to five times after a retryable failure, and safely reclaims a delivery left in progress by
+a process interruption. Sandbox receipts remain queued but are not sent
+unless `CUSTOMER_EMAIL_SEND_SANDBOX=true`. A successful customer-profile update likewise queues one
+account-change confirmation addressed to the active account user. That confirmation intentionally
+contains no changed profile values or other sensitive data.
 
 `GET /v1/customer-portal/device-care/wallet` returns integer-minor-unit values only:
 `balanceMinor` (the historical current balance, capped for display), `availableMinor` (zero until the

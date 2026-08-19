@@ -28,8 +28,13 @@ import {
 import { PostgresDeviceCareRepository, SquareDeviceCareProvider } from './device-care.js';
 import { PostgresDeviceCareWalletRepository } from './device-care-wallet.js';
 import { PostgresRetellCallRepository } from './retell.js';
+import { loadResendEmailConfiguration, PostgresCustomerEmailOutbox } from './customer-email.js';
 
 const environment = loadEnvironment();
+const emailConfiguration = loadResendEmailConfiguration(process.env);
+const customerEmailOutbox = emailConfiguration
+  ? new PostgresCustomerEmailOutbox(environment.DATABASE_URL, emailConfiguration)
+  : undefined;
 const fieldEncryptor = loadFieldEncryptor(environment);
 const timekeepingRepository = new PostgresTimekeepingRepository(environment.DATABASE_URL);
 const paymentConfiguration = environment.PAYMENTS_ENABLED
@@ -127,6 +132,13 @@ const app = buildApp({
 async function start(): Promise<void> {
   try {
     await app.listen({ host: environment.CORE_API_HOST, port: environment.CORE_API_PORT });
+    if (customerEmailOutbox) {
+      void customerEmailOutbox.deliverPending().catch((error: unknown) => app.log.error(error));
+      const interval = setInterval(() => {
+        void customerEmailOutbox.deliverPending().catch((error: unknown) => app.log.error(error));
+      }, environment.CUSTOMER_EMAIL_DELIVERY_POLL_INTERVAL_MS);
+      interval.unref();
+    }
   } catch (error) {
     app.log.error(error);
     process.exitCode = 1;

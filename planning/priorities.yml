@@ -502,3 +502,14 @@ priorities:
       Add the campaign queue, consent/suppression preflight, lead pipeline, CSV validation, and Retell
       outbound adapter only after the operational owner, call-volume safeguards, and required Retell
       outbound configuration are established.
+  - id: CORE-040
+    title: Customer transactional email delivery and Device Care receipts
+    status: done
+    priority: 39
+    dependencies: [CORE-007, CORE-018, CORE-032, CORE-036]
+    acceptance_criteria:
+      - Resend is a backend-only, configuration-validated transactional email adapter; no provider credential or email-delivery authority is exposed to applications.
+      - Customer profile updates create one auditable, idempotent confirmation delivery record addressed to the authenticated account email without storing profile values in the email payload.
+      - A replay-safe successful Device Care invoice payment creates one durable receipt delivery record containing the subscription's immutable amount, currency, provider invoice reference, and payment time; sandbox receipts are suppressed unless explicitly enabled.
+      - Delivery attempts preserve provider references, redacted failures, retry state, and a Core-owned audit trail; an email-provider failure never rolls back the customer or payment operation.
+      - README documents setup, environment variables, operational behavior, and relevant delivery failure handling; adapter, queue, and integration tests cover success, duplicate, failure, and sandbox behavior.
