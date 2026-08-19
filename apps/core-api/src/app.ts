@@ -105,6 +105,12 @@ import {
   verifyRetellWebhook,
   type RetellCallRepository,
 } from './retell.js';
+import {
+  acceptAccountInvitationSchema,
+  createAccountInvitationSchema,
+  revokeAccountInvitationSchema,
+  type AccountInvitationRepository,
+} from './account-invitations.js';
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -139,6 +145,8 @@ export type BuildAppOptions = {
     sandbox?: SquareWebhookConfiguration | undefined;
   };
   retell?: { apiKey: string; repository: RetellCallRepository };
+  accountInvitationRepository?: AccountInvitationRepository;
+  invitationEmailClaim?: string;
   apiSecurity?: ApiSecurityConfig;
   verifyToken?: TokenVerifier;
 };
@@ -166,6 +174,8 @@ export function buildApp({
   squareWebhookRepository,
   squareWebhooks,
   retell,
+  accountInvitationRepository,
+  invitationEmailClaim,
   apiSecurity,
   verifyToken,
 }: BuildAppOptions = {}): FastifyInstance {
@@ -836,6 +846,131 @@ export function buildApp({
           });
         revoke('/v1/core-admin/authorization/role-assignments/:id/revoke', 'revokeRoleAssignment');
         revoke('/v1/core-admin/authorization/entitlements/:id/revoke', 'revokeEntitlement');
+      }
+      if (accountInvitationRepository) {
+        const invitationGuards = [
+          authenticate,
+          async (request: FastifyRequest, reply: FastifyReply) => {
+            if (
+              !security?.stepUpClaim ||
+              !security.stepUpValue ||
+              hasStepUpAuthentication(request.auth!, security)
+            )
+              return;
+            return reply.code(403).send({
+              error: { code: 'STEP_UP_REQUIRED', message: 'Step-up authentication is required.' },
+            });
+          },
+          createAuthorizationGuard(authorizer, {
+            applicationKey: 'core-admin',
+            permissionKey: 'authorization.invite',
+          }),
+        ];
+        app.get('/v1/core-admin/account-invitations', { preHandler: invitationGuards }, async () =>
+          accountInvitationRepository.list(),
+        );
+        app.post(
+          '/v1/core-admin/account-invitations',
+          { preHandler: invitationGuards },
+          async (request, reply) => {
+            const input = createAccountInvitationSchema.safeParse(request.body);
+            if (!input.success)
+              return reply.code(400).send({
+                error: {
+                  code: 'INVALID_ACCOUNT_INVITATION',
+                  message: 'Account invitation input is invalid.',
+                },
+              });
+            const result = await accountInvitationRepository.create(
+              request.auth!.sub!,
+              input.data,
+              String(request.headers['x-correlation-id'] ?? randomUUID()),
+            );
+            if (result === 'invalid_expiry')
+              return reply.code(400).send({
+                error: {
+                  code: 'INVALID_ACCOUNT_INVITATION_EXPIRY',
+                  message: 'Invitation expiry must be between now and 30 days from now.',
+                },
+              });
+            return (
+              result ??
+              reply.code(409).send({
+                error: {
+                  code: 'ACCOUNT_INVITATION_ACCESS_EXISTS',
+                  message: 'The recipient already has this application access or role.',
+                },
+              })
+            );
+          },
+        );
+        app.post(
+          '/v1/core-admin/account-invitations/:id/revoke',
+          { preHandler: invitationGuards },
+          async (request, reply) => {
+            const id = (request.params as { id: string }).id;
+            const input = revokeAccountInvitationSchema.safeParse(request.body);
+            if (!zUuid(id) || !input.success)
+              return reply.code(400).send({
+                error: {
+                  code: 'INVALID_ACCOUNT_INVITATION_REVOCATION',
+                  message: 'Account invitation revocation input is invalid.',
+                },
+              });
+            const revoked = await accountInvitationRepository.revoke(
+              request.auth!.sub!,
+              id,
+              input.data,
+              String(request.headers['x-correlation-id'] ?? randomUUID()),
+            );
+            return revoked
+              ? { status: 'revoked' }
+              : reply.code(404).send({
+                  error: {
+                    code: 'ACCOUNT_INVITATION_NOT_FOUND',
+                    message: 'An active account invitation was not found.',
+                  },
+                });
+          },
+        );
+        app.post(
+          '/v1/account-invitations/accept',
+          { preHandler: authenticate },
+          async (request, reply) => {
+            const input = acceptAccountInvitationSchema.safeParse(request.body);
+            if (!input.success)
+              return reply.code(400).send({
+                error: {
+                  code: 'INVALID_ACCOUNT_INVITATION_ACCEPTANCE',
+                  message: 'Account invitation acceptance input is invalid.',
+                },
+              });
+            const claim = invitationEmailClaim ?? 'email';
+            const emailClaim = request.auth?.[claim];
+            const result = await accountInvitationRepository.accept(
+              request.auth!.sub!,
+              typeof emailClaim === 'string' ? emailClaim : undefined,
+              input.data,
+              String(request.headers['x-correlation-id'] ?? randomUUID()),
+            );
+            if (result === 'email_mismatch')
+              return reply.code(400).send({
+                error: {
+                  code: 'INVITATION_EMAIL_CLAIM_MISSING',
+                  message: 'The access token must contain the configured invitation email claim.',
+                },
+              });
+            return (
+              result ??
+              reply.code(409).send({
+                error: {
+                  code: 'ACCOUNT_INVITATION_UNAVAILABLE',
+                  message: 'This invitation is unavailable for the authenticated account.',
+                },
+              })
+            );
+          },
+        );
       }
       if (organizationRepository) {
         app.get(

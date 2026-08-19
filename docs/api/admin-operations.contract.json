@@ -96,6 +96,46 @@
     },
     {
       "method": "GET",
+      "path": "/core-admin/account-invitations",
+      "authorization": "core-admin + authorization.invite + step-up",
+      "request": "none",
+      "response": "recent invitation records without invitation tokens",
+      "failures": ["UNAUTHENTICATED", "FORBIDDEN", "STEP_UP_REQUIRED"]
+    },
+    {
+      "method": "POST",
+      "path": "/core-admin/account-invitations",
+      "authorization": "core-admin + authorization.invite + step-up",
+      "request": "{ email, roleId, expiresAt?, idempotencyKey }",
+      "response": "queued role-specific invitation record without token",
+      "failures": [
+        "INVALID_ACCOUNT_INVITATION",
+        "INVALID_ACCOUNT_INVITATION_EXPIRY",
+        "ACCOUNT_INVITATION_ACCESS_EXISTS"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/core-admin/account-invitations/:id/revoke",
+      "authorization": "core-admin + authorization.invite + step-up",
+      "request": "{ reason, idempotencyKey }",
+      "response": "{ status: revoked }",
+      "failures": ["INVALID_ACCOUNT_INVITATION_REVOCATION", "ACCOUNT_INVITATION_NOT_FOUND"]
+    },
+    {
+      "method": "POST",
+      "path": "/account-invitations/accept",
+      "authorization": "authenticated Auth0 API token with the configured email claim; no existing Core entitlement",
+      "request": "{ token, idempotencyKey }",
+      "response": "{ applicationKey, roleKey, roleName }",
+      "failures": [
+        "INVALID_ACCOUNT_INVITATION_ACCEPTANCE",
+        "INVITATION_EMAIL_CLAIM_MISSING",
+        "ACCOUNT_INVITATION_UNAVAILABLE"
+      ]
+    },
+    {
+      "method": "GET",
       "path": "/core-admin/organization-hierarchy",
       "authorization": "core-admin + organization.read",
       "request": "none",

@@ -513,3 +513,14 @@ priorities:
       - A replay-safe successful Device Care invoice payment creates one durable receipt delivery record containing the subscription's immutable amount, currency, provider invoice reference, and payment time; sandbox receipts are suppressed unless explicitly enabled.
       - Delivery attempts preserve provider references, redacted failures, retry state, and a Core-owned audit trail; an email-provider failure never rolls back the customer or payment operation.
       - README documents setup, environment variables, operational behavior, and relevant delivery failure handling; adapter, queue, and integration tests cover success, duplicate, failure, and sandbox behavior.
+  - id: CORE-041
+    title: Owner-controlled workforce account invitations
+    status: done
+    priority: 40
+    dependencies: [CORE-005, CORE-029-01, CORE-040]
+    acceptance_criteria:
+      - A step-up-authenticated Core administrator with the dedicated invitation permission can issue, list, revoke, and resend email-specific application-role invitations without creating unclaimed access.
+      - An invite recipient must authenticate with Auth0 using the invited email before Core creates or links the identity and grants the invitation's application entitlement and role assignment exactly once.
+      - Invitation tokens are high-entropy, stored only as a hash plus encrypted retry material, expire, are revocable, and are never logged or returned by the Core API.
+      - Invitation delivery uses the server-only Resend configuration, durable retries, provider idempotency, audit events, and no frontend secret.
+      - README and API contract document Auth0 claim setup, routes, authorization, request/response/failure behavior, and operational configuration; unit and PostgreSQL integration tests cover authorization, replay, mismatch, expiry, revocation, and delivery failure.

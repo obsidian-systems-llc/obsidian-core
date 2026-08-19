@@ -57,6 +57,7 @@ try {
   for (const permissionDefinition of [
     ['authorization.read', 'Read authorization'],
     ['authorization.manage', 'Manage authorization'],
+    ['authorization.invite', 'Issue and manage workforce account invitations'],
     ['employee.manage', 'Manage employee lifecycle and assignments'],
     ['customer.manage', 'Manage customer profiles'],
     ['repair.customer.manage', 'Manage repair customer associations'],

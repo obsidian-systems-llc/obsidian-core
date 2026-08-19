@@ -44,4 +44,30 @@ describe('environment validation', () => {
       }),
     ).toThrow('Production requires HTTPS API_ALLOWED_ORIGINS');
   });
+
+  it('requires a fragment-free invitation page and transactional email configuration when invitations are enabled', () => {
+    expect(() =>
+      loadEnvironment({
+        DATABASE_URL: 'postgresql://user:password@localhost:5432/obsidian_core',
+        AUTH0_DOMAIN: 'obsidian-core-dev.us.auth0.com',
+        AUTH0_AUDIENCE: 'https://api.obsidian-systems.tech',
+        FIELD_ENCRYPTION_KEY: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=',
+        FIELD_ENCRYPTION_KEY_ID: 'test-key',
+        STAFF_INVITATIONS_ENABLED: 'true',
+      }),
+    ).toThrow('RESEND_API_KEY');
+    expect(() =>
+      loadEnvironment({
+        DATABASE_URL: 'postgresql://user:password@localhost:5432/obsidian_core',
+        AUTH0_DOMAIN: 'obsidian-core-dev.us.auth0.com',
+        AUTH0_AUDIENCE: 'https://api.obsidian-systems.tech',
+        FIELD_ENCRYPTION_KEY: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=',
+        FIELD_ENCRYPTION_KEY_ID: 'test-key',
+        STAFF_INVITATIONS_ENABLED: 'true',
+        RESEND_API_KEY: 're_test',
+        RESEND_FROM_EMAIL: 'Obsidian Systems <receipts@example.test>',
+        INVITATION_ACCEPT_URL: 'https://admin.example.test/invitations#invite=unsafe',
+      }),
+    ).toThrow('must not include a query string or fragment');
+  });
 });

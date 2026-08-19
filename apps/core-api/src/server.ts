@@ -29,13 +29,23 @@ import { PostgresDeviceCareRepository, SquareDeviceCareProvider } from './device
 import { PostgresDeviceCareWalletRepository } from './device-care-wallet.js';
 import { PostgresRetellCallRepository } from './retell.js';
 import { loadResendEmailConfiguration, PostgresCustomerEmailOutbox } from './customer-email.js';
+import { PostgresAccountInvitationRepository } from './account-invitations.js';
 
 const environment = loadEnvironment();
 const emailConfiguration = loadResendEmailConfiguration(process.env);
-const customerEmailOutbox = emailConfiguration
-  ? new PostgresCustomerEmailOutbox(environment.DATABASE_URL, emailConfiguration)
-  : undefined;
+const customerEmailOutbox =
+  environment.CUSTOMER_EMAIL_ENABLED && emailConfiguration
+    ? new PostgresCustomerEmailOutbox(environment.DATABASE_URL, emailConfiguration)
+    : undefined;
 const fieldEncryptor = loadFieldEncryptor(environment);
+const accountInvitationRepository = environment.STAFF_INVITATIONS_ENABLED
+  ? new PostgresAccountInvitationRepository(
+      environment.DATABASE_URL,
+      fieldEncryptor,
+      emailConfiguration!,
+      environment.INVITATION_ACCEPT_URL!,
+    )
+  : undefined;
 const timekeepingRepository = new PostgresTimekeepingRepository(environment.DATABASE_URL);
 const paymentConfiguration = environment.PAYMENTS_ENABLED
   ? loadPaymentProcessorConfiguration(process.env)
@@ -103,6 +113,12 @@ const app = buildApp({
       }
     : {}),
   ...(deviceCareRepository ? { deviceCareRepository } : {}),
+  ...(accountInvitationRepository
+    ? {
+        accountInvitationRepository,
+        invitationEmailClaim: environment.AUTH0_INVITATION_EMAIL_CLAIM,
+      }
+    : {}),
   ...(squareWebhookRepository
     ? {
         squareWebhookRepository,
@@ -132,10 +148,18 @@ const app = buildApp({
 async function start(): Promise<void> {
   try {
     await app.listen({ host: environment.CORE_API_HOST, port: environment.CORE_API_PORT });
-    if (customerEmailOutbox) {
-      void customerEmailOutbox.deliverPending().catch((error: unknown) => app.log.error(error));
+    if (customerEmailOutbox || accountInvitationRepository) {
+      const deliverTransactionalEmail = () => {
+        if (customerEmailOutbox)
+          void customerEmailOutbox.deliverPending().catch((error: unknown) => app.log.error(error));
+        if (accountInvitationRepository)
+          void accountInvitationRepository
+            .deliverPending()
+            .catch((error: unknown) => app.log.error(error));
+      };
+      deliverTransactionalEmail();
       const interval = setInterval(() => {
-        void customerEmailOutbox.deliverPending().catch((error: unknown) => app.log.error(error));
+        deliverTransactionalEmail();
       }, environment.CUSTOMER_EMAIL_DELIVERY_POLL_INTERVAL_MS);
       interval.unref();
     }

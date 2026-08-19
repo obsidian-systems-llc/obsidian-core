@@ -47,6 +47,12 @@ const environmentSchema = z.object({
     .min(10_000)
     .max(3_600_000)
     .default(60_000),
+  STAFF_INVITATIONS_ENABLED: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((value) => value === 'true'),
+  INVITATION_ACCEPT_URL: z.string().url().optional(),
+  AUTH0_INVITATION_EMAIL_CLAIM: z.string().min(1).default('email'),
 });
 
 export type Environment = z.infer<typeof environmentSchema>;
@@ -59,12 +65,23 @@ export function loadEnvironment(source: NodeJS.ProcessEnv = process.env): Enviro
   if (environment.RETELL_ENABLED && !environment.RETELL_API_KEY)
     throw new Error('RETELL_API_KEY is required when RETELL_ENABLED=true.');
   if (
-    environment.CUSTOMER_EMAIL_ENABLED &&
+    (environment.CUSTOMER_EMAIL_ENABLED || environment.STAFF_INVITATIONS_ENABLED) &&
     (!environment.RESEND_API_KEY || !environment.RESEND_FROM_EMAIL)
   )
     throw new Error(
-      'RESEND_API_KEY and RESEND_FROM_EMAIL are required when CUSTOMER_EMAIL_ENABLED=true.',
+      'RESEND_API_KEY and RESEND_FROM_EMAIL are required when transactional email or staff invitations are enabled.',
     );
+  if (environment.STAFF_INVITATIONS_ENABLED && !environment.INVITATION_ACCEPT_URL)
+    throw new Error('INVITATION_ACCEPT_URL is required when STAFF_INVITATIONS_ENABLED=true.');
+  if (environment.STAFF_INVITATIONS_ENABLED) {
+    const invitationUrl = new URL(environment.INVITATION_ACCEPT_URL!);
+    if (invitationUrl.search || invitationUrl.hash)
+      throw new Error('INVITATION_ACCEPT_URL must not include a query string or fragment.');
+    if (environment.NODE_ENV === 'production' && invitationUrl.protocol !== 'https:')
+      throw new Error(
+        'Production STAFF_INVITATIONS_ENABLED requires an HTTPS INVITATION_ACCEPT_URL.',
+      );
+  }
   const origins =
     environment.API_ALLOWED_ORIGINS?.split(',')
       .map((origin) => origin.trim())

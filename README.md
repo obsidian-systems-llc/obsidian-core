@@ -61,6 +61,10 @@ permission, and `400` with a stable route-specific `INVALID_*` code for invalid 
 | POST | `/v1/core-admin/authorization/entitlements` | `core-admin` + `authorization.manage`, step-up | Creates an effective-dated application entitlement. |
 | POST | `/v1/core-admin/authorization/role-assignments/:id/revoke` | `core-admin` + `authorization.manage`, step-up | Ends an active role assignment with an auditable reason. |
 | POST | `/v1/core-admin/authorization/entitlements/:id/revoke` | `core-admin` + `authorization.manage`, step-up | Ends an active application entitlement with an auditable reason. |
+| GET | `/v1/core-admin/account-invitations` | `core-admin` + `authorization.invite`, step-up | Lists the most recent workforce invitations without exposing their tokens. |
+| POST | `/v1/core-admin/account-invitations` | `core-admin` + `authorization.invite`, step-up | Queues a role-specific invitation email for an address that does not already hold the same access. |
+| POST | `/v1/core-admin/account-invitations/:id/revoke` | `core-admin` + `authorization.invite`, step-up | Revokes an unclaimed workforce invitation. |
+| POST | `/v1/account-invitations/accept` | Authenticated Auth0 user; no existing Core entitlement required | Accepts an invitation only when the token's configured email claim matches its recipient. |
 | GET | `/v1/core-admin/organization-hierarchy` | `core-admin` + `organization.read` | Returns active organization hierarchy. |
 | POST | `/v1/core-admin/employees` | `core-admin` + `employee.manage`, step-up | Creates an encrypted employee profile for an existing active Core user. |
 | GET | `/v1/core-admin/employees/:id` | `core-admin` + `employee.manage`, step-up | Reads an employee profile for authorized administration. |
@@ -425,6 +429,8 @@ button; `403 FORBIDDEN` is authoritative.
 | `CUSTOMER_EMAIL_ENABLED` | No, default `false` | Explicit server-side opt-in for Resend transactional customer mail. When `true`, `RESEND_API_KEY` and `RESEND_FROM_EMAIL` are required. |
 | `RESEND_API_KEY`, `RESEND_FROM_EMAIL`, `RESEND_REPLY_TO` | Required/optional when customer email is enabled | Resend API credential, verified sender identity, and optional reply-to mailbox. These values stay in managed server secret storage and never reach a GUI. |
 | `CUSTOMER_EMAIL_SEND_SANDBOX`, `CUSTOMER_EMAIL_DELIVERY_POLL_INTERVAL_MS` | No | Sandbox receipts are suppressed by default; set the first to `true` only for intentional sandbox-mail testing. The interval controls the server's durable-outbox delivery poll and defaults to 60 seconds. |
+| `STAFF_INVITATIONS_ENABLED`, `INVITATION_ACCEPT_URL` | No, both required to activate workforce invitations | Enables the owner-controlled invitation outbox and defines the HTTPS administrative-app acceptance page. The URL must not contain a query string or fragment. |
+| `AUTH0_INVITATION_EMAIL_CLAIM` | No, default `email` | Auth0 access-token claim Core compares to the invitation recipient. Use a namespaced custom claim in production when the API access token does not include `email`. |
 | `WORLDPAY_*` | Reserved, disabled | Commerce360/Access Worldpay configuration; processing is deliberately blocked pending provider-issued values and verification. |
 
 Production deployment must use managed secret storage, HTTPS termination, a backed-up PostgreSQL
@@ -451,6 +457,50 @@ Redeploy Core after setting the secrets. The sender must use the verified domain
 off in normal operation; enable it temporarily only to test sandbox subscription-receipt delivery to
 a controlled recipient. Core creates no external email API route: delivery is initiated only by its
 customer-profile update and signed payment-webhook workflows.
+
+### Workforce account invitation setup
+
+Core never creates a password or handles a password in an invitation flow. Auth0's Database
+Connection and Universal Login handle account creation, password selection, and email verification.
+Configure the administrative app's signup/login journey first, then add this Auth0 Post-Login Action
+to place the authenticated email in the Core API access token (using the claim name configured below):
+
+```js
+exports.onExecutePostLogin = async (event, api) => {
+  if (event.user.email)
+    api.accessToken.setCustomClaim('https://obsidian-systems.tech/email', event.user.email);
+};
+```
+
+Configure Render with the following after the Resend sender is verified:
+
+```text
+STAFF_INVITATIONS_ENABLED=true
+INVITATION_ACCEPT_URL=https://admin.obsidian-systems.tech/invitations/accept
+AUTH0_INVITATION_EMAIL_CLAIM=https://obsidian-systems.tech/email
+```
+
+`INVITATION_ACCEPT_URL` must be an HTTPS page controlled by an Obsidian administrative application.
+Core appends the opaque invitation token as a URL fragment (`#invite=...`), so browsers do not send it
+to the Vercel server. The page must read the fragment, require the recipient to sign up or sign in
+through Auth0, obtain an API-audience access token, and send the token only to `POST
+/v1/account-invitations/accept`. Do not log, persist, or place the fragment token in application
+analytics. The access token's configured email claim must exactly match the invited address.
+
+An owner uses `GET /v1/core-admin/authorization/roles` to populate the available role selector, then
+uses `POST /v1/core-admin/account-invitations` with `{ email, roleId, expiresAt?, idempotencyKey }`.
+Core derives the corresponding application entitlement from the selected role; a client cannot choose
+a different application. The caller must be step-up-authenticated and have `authorization.invite`,
+which the protected Super Admin role receives. Invitation links expire after seven days by default and
+may be set up to 30 days ahead. Use the listing and revoke routes to manage them. An invitation token
+is high entropy, stored hashed plus encrypted retry material, never returned by Core, and erased after
+acceptance. Reissuing `POST /v1/core-admin/account-invitations` with a new idempotency key for the
+same email and role revokes the prior unclaimed invitation and sends a new link. Resend delivery
+retries up to five times and records audited outcomes.
+
+The protected `core-admin/super-admin` role is intentionally not inviteable. It is assigned only by
+the controlled bootstrap process, so the company owner remains the sole highest-privilege account
+until a separately reviewed ownership-transfer procedure exists.
 
 ### Interchangeable payment-provider configuration
 
