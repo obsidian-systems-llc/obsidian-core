@@ -309,14 +309,23 @@ priorities:
     implementation_notes: >-
       Created by CORE-026 to turn the repository security baseline into executable API perimeter controls.
   - id: CORE-029
-    title: Administrative organization, customer, and employee write workflows
-    status: proposed
+    title: Admin operations tree and customer communication routing
+    status: in_progress
     priority: 28
-    dependencies: [CORE-006, CORE-007, CORE-008, CORE-028]
+    dependencies: [CORE-005, CORE-006, CORE-007, CORE-008, CORE-028, CORE-037, CORE-038]
     acceptance_criteria:
-      - Authorized administrative APIs create, change, deactivate, and audit organization hierarchy, customer, and employee records
-      - Sensitive customer and employee writes preserve encryption, effective dates, idempotency, and resource-level authorization
-      - Every administrative API is documented in the README integration reference and covered by allowed, denied, and real-database tests
+      - Executives, administrators, managers, and employees receive distinct Core-admin/employee entitlements and least-privilege permissions that are enforceable by organization, store, department, and management assignment
+      - Authorized administrative APIs create, change, deactivate, and audit organization hierarchy, customer, employee, assignment, and customer-to-repair linkage records without rewriting historical operational records
+      - Customer-originated repair requests and actionable communications calls can be routed, claimed, reassigned, escalated, and completed through Core-owned manager and administrator workflows
+      - Sensitive customer and employee writes preserve encryption, effective dates, idempotency, resource-level authorization, and audit history; customer-facing applications can read the linked repair status without receiving internal-only data
+      - Every administrative and routing API is documented in the README integration reference and covered by allowed, denied, duplicate, and real-database tests
+    implementation_notes: >-
+      This is the current operational priority. Build the backend tree for customer communication and
+      repair handling first: authorization administration, employee/manager assignment, administrative
+      customer and repair management, and communication routing. Keep payroll export work (CORE-020),
+      payment-provider-dependent work, and uncontrolled outbound campaigns deferred. Split any
+      independently deployable area discovered during implementation into a proposed follow-up rather
+      than leaving business rules to dashboard applications.
   - id: CORE-030
     title: Quote approval, customer acceptance, and revision workflows
     status: proposed
