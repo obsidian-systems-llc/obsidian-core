@@ -40,3 +40,48 @@ describe('Square webhook boundary', () => {
     expect(response.statusCode).toBe(403);
   });
 });
+
+describe('Stripe webhook boundary', () => {
+  const stripeSecret = 'whsec_test';
+  const stripeApp = buildApp({
+    stripeWebhookRepository: { processStripeWebhook: async () => 'processed' },
+    stripeWebhooks: {
+      test: {
+        environment: 'test',
+        notificationUrl: 'https://api.example.test/v1/webhooks/stripe/test',
+        signingSecret: stripeSecret,
+        toleranceSeconds: 3600,
+      },
+    },
+  });
+  afterAll(async () => stripeApp.close());
+  it('accepts a current correctly signed Stripe event and rejects stale or invalid messages', async () => {
+    const payload = JSON.stringify({
+      id: 'evt_1',
+      type: 'invoice.paid',
+      created: Math.floor(Date.now() / 1000),
+      data: { object: { id: 'in_1', subscription: 'sub_1' } },
+    });
+    const timestamp = String(Math.floor(Date.now() / 1000));
+    const signature = createHmac('sha256', stripeSecret)
+      .update(`${timestamp}.${payload}`)
+      .digest('hex');
+    const accepted = await stripeApp.inject({
+      method: 'POST',
+      url: '/v1/webhooks/stripe/test',
+      payload,
+      headers: {
+        'content-type': 'application/json',
+        'stripe-signature': `t=${timestamp},v1=${signature}`,
+      },
+    });
+    expect(accepted.statusCode).toBe(202);
+    const rejected = await stripeApp.inject({
+      method: 'POST',
+      url: '/v1/webhooks/stripe/test',
+      payload,
+      headers: { 'content-type': 'application/json', 'stripe-signature': 't=1,v1=bad' },
+    });
+    expect(rejected.statusCode).toBe(403);
+  });
+});

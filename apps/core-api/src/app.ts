@@ -85,14 +85,17 @@ import {
   paymentRequestSchema,
   refundRequestSchema,
   type SquareWebhookConfiguration,
+  type StripeWebhookConfiguration,
   squareWebhookEventSchema,
+  stripeWebhookEventSchema,
+  verifyStripeWebhookSignature,
   verifySquareWebhookSignature,
 } from './payments.js';
 import {
   enrollDeviceCareSchema,
   paymentMethodMutationSchema,
   savePaymentMethodSchema,
-  SquareDeviceCareProviderError,
+  DeviceCareProviderError,
   type DeviceCareRepository,
 } from './device-care.js';
 import type { DeviceCareWallet } from './device-care-wallet.js';
@@ -144,6 +147,11 @@ export type BuildAppOptions = {
     production?: SquareWebhookConfiguration | undefined;
     sandbox?: SquareWebhookConfiguration | undefined;
   };
+  stripeWebhookRepository?: Pick<PaymentRepository, 'processStripeWebhook'>;
+  stripeWebhooks?: {
+    production?: StripeWebhookConfiguration | undefined;
+    test?: StripeWebhookConfiguration | undefined;
+  };
   retell?: { apiKey: string; repository: RetellCallRepository };
   accountInvitationRepository?: AccountInvitationRepository;
   invitationEmailClaim?: string;
@@ -173,6 +181,8 @@ export function buildApp({
   deviceCareWalletRepository,
   squareWebhookRepository,
   squareWebhooks,
+  stripeWebhookRepository,
+  stripeWebhooks,
   retell,
   accountInvitationRepository,
   invitationEmailClaim,
@@ -267,6 +277,45 @@ export function buildApp({
       });
     if (squareWebhooks.sandbox) registerSquareWebhook('sandbox', squareWebhooks.sandbox);
     if (squareWebhooks.production) registerSquareWebhook('production', squareWebhooks.production);
+  }
+  if (stripeWebhookRepository && stripeWebhooks) {
+    const registerStripeWebhook = (
+      environment: 'test' | 'production',
+      stripeWebhook: StripeWebhookConfiguration,
+    ) =>
+      app.post(`/v1/webhooks/stripe/${environment}`, async (request, reply) => {
+        const signature = request.headers['stripe-signature'];
+        const payload = request.rawBody;
+        if (
+          typeof signature !== 'string' ||
+          !payload ||
+          !verifyStripeWebhookSignature({
+            payload,
+            signature,
+            signingSecret: stripeWebhook.signingSecret,
+            toleranceSeconds: stripeWebhook.toleranceSeconds,
+          })
+        )
+          return reply.code(403).send({
+            error: {
+              code: 'INVALID_WEBHOOK_SIGNATURE',
+              message: 'Webhook signature is invalid.',
+            },
+          });
+        const parsed = stripeWebhookEventSchema.safeParse(request.body);
+        if (!parsed.success)
+          return reply.code(400).send({
+            error: { code: 'INVALID_STRIPE_WEBHOOK', message: 'Webhook payload is invalid.' },
+          });
+        const result = await stripeWebhookRepository.processStripeWebhook(
+          parsed.data,
+          payload,
+          environment,
+        );
+        return reply.code(result === 'duplicate' ? 200 : 202).send({ status: result });
+      });
+    if (stripeWebhooks.test) registerStripeWebhook('test', stripeWebhooks.test);
+    if (stripeWebhooks.production) registerStripeWebhook('production', stripeWebhooks.production);
   }
   if (retell)
     app.post('/v1/webhooks/retell', async (request, reply) => {
@@ -1678,6 +1727,53 @@ export function buildApp({
             permissionKey: 'payment-method.manage',
           };
           app.post(
+            '/v1/customer-portal/payment-methods/setup',
+            {
+              preHandler: [
+                authenticate,
+                createAuthorizationGuard(authorizer, deviceCareRequirement),
+              ],
+            },
+            async (request, reply) => {
+              const parsed = paymentMethodMutationSchema.safeParse(request.body);
+              if (!parsed.success)
+                return reply.code(400).send({
+                  error: {
+                    code: 'INVALID_PAYMENT_METHOD_SETUP',
+                    message: 'Payment-method setup input is invalid.',
+                  },
+                });
+              try {
+                const result = await deviceCareRepository.createPaymentMethodSetupForSubject?.(
+                  request.auth!.sub!,
+                  parsed.data,
+                  String(request.headers['x-correlation-id'] ?? randomUUID()),
+                );
+                if (!result)
+                  return reply.code(503).send({
+                    error: {
+                      code: 'PAYMENT_METHOD_SETUP_UNAVAILABLE',
+                      message: 'Payment-method setup is unavailable for the selected provider.',
+                    },
+                  });
+                return result;
+              } catch (error) {
+                request.log.warn(
+                  error instanceof DeviceCareProviderError
+                    ? { providerStatusCode: error.statusCode }
+                    : {},
+                  'Payment method setup failed.',
+                );
+                return reply.code(502).send({
+                  error: {
+                    code: 'PAYMENT_PROVIDER_UNAVAILABLE',
+                    message: 'Payment provider did not accept the payment-method setup.',
+                  },
+                });
+              }
+            },
+          );
+          app.post(
             '/v1/customer-portal/payment-methods',
             {
               preHandler: [
@@ -1710,7 +1806,7 @@ export function buildApp({
                 );
               } catch (error) {
                 request.log.warn(
-                  error instanceof SquareDeviceCareProviderError
+                  error instanceof DeviceCareProviderError
                     ? {
                         providerErrorCodes: error.errors.map((item) => item.code).filter(Boolean),
                         providerErrorFields: error.errors.map((item) => item.field).filter(Boolean),

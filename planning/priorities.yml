@@ -524,3 +524,19 @@ priorities:
       - Invitation tokens are high-entropy, stored only as a hash plus encrypted retry material, expire, are revocable, and are never logged or returned by the Core API.
       - Invitation delivery uses the server-only Resend configuration, durable retries, provider idempotency, audit events, and no frontend secret.
       - README and API contract document Auth0 claim setup, routes, authorization, request/response/failure behavior, and operational configuration; unit and PostgreSQL integration tests cover authorization, replay, mismatch, expiry, revocation, and delivery failure.
+  - id: CORE-042
+    title: Stripe payment-provider adapter and portable application contract
+    status: done
+    priority: 41
+    dependencies: [CORE-012, CORE-013, CORE-018, CORE-032, CORE-036]
+    acceptance_criteria:
+      - PAYMENT_PROCESSOR selects Square or Stripe without exposing secret processor credentials to an application and without rewriting historical provider references.
+      - Stripe test and production payment, refund, saved-method, Device Care subscription, and signed webhook paths follow Core's existing authorization, idempotency, audit, and durable lifecycle conventions.
+      - Browser applications save Stripe cards only through a Core-created SetupIntent and a Stripe.js-confirmed short-lived client secret; Core never stores raw card data.
+      - Stripe invoice and subscription lifecycle events replay-safely reconcile Core state and Device Care credit/receipt behavior.
+      - README, environment sample, ADR, migration, route reference, and provider/unit/integration coverage document the portable client contract and safe operational setup.
+    implementation_notes: >-
+      Stripe is becoming the preferred online processor due to its Bluevine settlement account.
+      Square remains selectable for existing operations. Core does not automatically migrate saved
+      cards, subscriptions, or customer consent between processors; that requires an explicit
+      customer re-consent/migration priority before switching existing active subscriptions.

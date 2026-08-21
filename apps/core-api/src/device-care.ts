@@ -5,6 +5,8 @@ import type {
   PaymentFetch,
   SquareAdapterConfiguration,
   SquareDeviceCareConfiguration,
+  StripeAdapterConfiguration,
+  StripeDeviceCareConfiguration,
 } from './payments.js';
 
 export const savePaymentMethodSchema = z.object({
@@ -35,7 +37,11 @@ export type DeviceCareEnrollment = {
   status: string;
 };
 
-type SquareCardProvider = {
+type DeviceCareCardProvider = {
+  createSetupIntent?(input: {
+    customerReference: string;
+    idempotencyKey: string;
+  }): Promise<{ clientSecret: string }>;
   createCustomer(input: {
     email: string;
     idempotencyKey: string;
@@ -107,8 +113,8 @@ type SquareSafeError = {
   field?: string | undefined;
 };
 
-/** Safe Square error metadata for server logs; it deliberately excludes request and response data. */
-export class SquareDeviceCareProviderError extends Error {
+/** Safe provider error metadata for server logs; it deliberately excludes request and response data. */
+export class DeviceCareProviderError extends Error {
   constructor(
     readonly statusCode: number,
     readonly errors: SquareSafeError[],
@@ -117,7 +123,10 @@ export class SquareDeviceCareProviderError extends Error {
   }
 }
 
-export class SquareDeviceCareProvider implements SquareCardProvider {
+/** Compatibility name retained for callers that need to identify Square-specific errors. */
+export class SquareDeviceCareProviderError extends DeviceCareProviderError {}
+
+export class SquareDeviceCareProvider implements DeviceCareCardProvider {
   private readonly apiBaseUrl: string;
   constructor(
     private readonly square: SquareAdapterConfiguration,
@@ -280,7 +289,195 @@ export class SquareDeviceCareProvider implements SquareCardProvider {
   }
 }
 
+const stripeCustomerSchema = z.object({ id: z.string().min(1) });
+const stripeSetupIntentSchema = z.object({
+  customer: z.string().min(1),
+  payment_method: z.union([z.string().min(1), z.object({ id: z.string().min(1) })]),
+  status: z.literal('succeeded'),
+});
+const stripePaymentMethodSchema = z.object({
+  id: z.string().min(1),
+  card: z
+    .object({
+      brand: z.string().nullable().optional(),
+      exp_month: z.number().int().nullable().optional(),
+      exp_year: z.number().int().nullable().optional(),
+      last4: z.string().nullable().optional(),
+    })
+    .optional(),
+  type: z.string().min(1),
+});
+const stripeSubscriptionSchema = z.object({
+  id: z.string().min(1),
+  status: z.string().min(1),
+  current_period_end: z.number().int().nonnegative().optional(),
+});
+
+/** Stripe Billing adapter. The browser must confirm a Core-created SetupIntent before saving a card. */
+export class StripeDeviceCareProvider implements DeviceCareCardProvider {
+  constructor(
+    private readonly stripe: StripeAdapterConfiguration,
+    private readonly deviceCare: StripeDeviceCareConfiguration,
+    private readonly fetcher: PaymentFetch = fetch,
+  ) {}
+  async createCustomer(input: {
+    email: string;
+    idempotencyKey: string;
+    name: string;
+    referenceId: string;
+  }) {
+    const body = await this.request(
+      '/v1/customers',
+      'POST',
+      {
+        email: input.email,
+        name: input.name,
+        'metadata[core_customer_profile_id]': input.referenceId,
+      },
+      input.idempotencyKey,
+    );
+    const parsed = stripeCustomerSchema.safeParse(body);
+    if (!parsed.success) throw new DeviceCareProviderError(502, []);
+    return parsed.data.id;
+  }
+  async createSetupIntent(input: { customerReference: string; idempotencyKey: string }) {
+    const result = await this.request(
+      '/v1/setup_intents',
+      'POST',
+      {
+        customer: input.customerReference,
+        usage: 'off_session',
+        'payment_method_types[0]': 'card',
+      },
+      input.idempotencyKey,
+    );
+    const parsed = z.object({ client_secret: z.string().min(1) }).safeParse(result);
+    if (!parsed.success) throw new DeviceCareProviderError(502, []);
+    return { clientSecret: parsed.data.client_secret };
+  }
+  async saveCard(input: {
+    customerReference: string;
+    cardholderName: string;
+    idempotencyKey: string;
+    sourceId: string;
+  }) {
+    const setupIntent = await this.request(
+      `/v1/setup_intents/${encodeURIComponent(input.sourceId)}`,
+      'GET',
+    );
+    const setup = stripeSetupIntentSchema.safeParse(setupIntent);
+    if (!setup.success || setup.data.customer !== input.customerReference)
+      throw new DeviceCareProviderError(422, []);
+    const paymentMethodId =
+      typeof setup.data.payment_method === 'string'
+        ? setup.data.payment_method
+        : setup.data.payment_method.id;
+    const method = stripePaymentMethodSchema.safeParse(
+      await this.request(`/v1/payment_methods/${encodeURIComponent(paymentMethodId)}`, 'GET'),
+    );
+    if (!method.success || method.data.type !== 'card') throw new DeviceCareProviderError(422, []);
+    return {
+      brand: method.data.card?.brand ?? null,
+      expMonth: method.data.card?.exp_month ?? null,
+      expYear: method.data.card?.exp_year ?? null,
+      last4: method.data.card?.last4 ?? null,
+      providerCardReference: method.data.id,
+      status: 'active',
+    };
+  }
+  async createSubscription(input: {
+    cardReference: string;
+    customerReference: string;
+    idempotencyKey: string;
+  }) {
+    const body = await this.request(
+      '/v1/subscriptions',
+      'POST',
+      {
+        customer: input.customerReference,
+        default_payment_method: input.cardReference,
+        'items[0][price]': this.deviceCare.priceId,
+        collection_method: 'charge_automatically',
+        'metadata[core_device_care]': 'true',
+      },
+      input.idempotencyKey,
+    );
+    const parsed = stripeSubscriptionSchema.safeParse(body);
+    if (!parsed.success) throw new DeviceCareProviderError(502, []);
+    return {
+      providerSubscriptionReference: parsed.data.id,
+      renewalAt: parsed.data.current_period_end
+        ? new Date(parsed.data.current_period_end * 1000)
+        : null,
+      status: mapSubscriptionStatus(parsed.data.status),
+      version: null,
+    };
+  }
+  async cancelSubscription(providerSubscriptionReference: string) {
+    const body = await this.request(
+      `/v1/subscriptions/${encodeURIComponent(providerSubscriptionReference)}`,
+      'POST',
+      { cancel_at_period_end: true },
+    );
+    const parsed = stripeSubscriptionSchema.safeParse(body);
+    if (!parsed.success) throw new DeviceCareProviderError(502, []);
+    return {
+      renewalAt: parsed.data.current_period_end
+        ? new Date(parsed.data.current_period_end * 1000)
+        : null,
+    };
+  }
+  async updateSubscriptionCard(input: {
+    cardReference: string;
+    providerSubscriptionReference: string;
+  }) {
+    await this.request(
+      `/v1/subscriptions/${encodeURIComponent(input.providerSubscriptionReference)}`,
+      'POST',
+      { default_payment_method: input.cardReference },
+    );
+    return { version: null };
+  }
+  async disableCard(providerCardReference: string) {
+    await this.request(
+      `/v1/payment_methods/${encodeURIComponent(providerCardReference)}/detach`,
+      'POST',
+      {},
+    );
+  }
+  private async request(
+    path: string,
+    method: 'GET' | 'POST',
+    values?: Record<string, string | boolean>,
+    idempotencyKey?: string,
+  ): Promise<unknown> {
+    const response = await this.fetcher(`https://api.stripe.com${path}`, {
+      method,
+      headers: {
+        Authorization: `Bearer ${this.stripe.secretKey}`,
+        ...(method === 'POST' ? { 'Content-Type': 'application/x-www-form-urlencoded' } : {}),
+        ...(idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : {}),
+      },
+      ...(method === 'POST'
+        ? {
+            body: new URLSearchParams(
+              Object.entries(values ?? {}).map(([key, value]) => [key, String(value)]),
+            ).toString(),
+          }
+        : {}),
+    });
+    const result = await response.json();
+    if (!response.ok) throw new DeviceCareProviderError(response.status, []);
+    return result;
+  }
+}
+
 export type DeviceCareRepository = {
+  createPaymentMethodSetupForSubject?(
+    subject: string,
+    input: z.infer<typeof paymentMethodMutationSchema>,
+    correlationId: string,
+  ): Promise<{ clientSecret: string; provider: 'stripe' } | null>;
   cancelForSubject(
     subject: string,
     input: z.infer<typeof paymentMethodMutationSchema>,
@@ -314,9 +511,67 @@ export type DeviceCareRepository = {
 export class PostgresDeviceCareRepository implements DeviceCareRepository {
   constructor(
     private readonly databaseUrl: string,
-    private readonly provider: SquareCardProvider,
-    private readonly environment: 'sandbox' | 'production',
+    private readonly provider: DeviceCareCardProvider,
+    private readonly environment: 'sandbox' | 'test' | 'production',
+    private readonly providerName: 'square' | 'stripe' = 'square',
   ) {}
+  async createPaymentMethodSetupForSubject(
+    subject: string,
+    input: z.infer<typeof paymentMethodMutationSchema>,
+    correlationId: string,
+  ): Promise<{ clientSecret: string; provider: 'stripe' } | null> {
+    if (this.providerName !== 'stripe' || !this.provider.createSetupIntent)
+      throw new Error('PAYMENT_METHOD_SETUP_UNSUPPORTED');
+    const client = new Client({ connectionString: this.databaseUrl });
+    try {
+      await client.connect();
+      await client.query('BEGIN');
+      const customer = await this.customer(client, subject);
+      if (!customer) return null;
+      const existing = await client.query<{ provider_customer_reference: string }>(
+        `SELECT provider_customer_reference FROM customer_payment_provider_profiles WHERE customer_profile_id=$1 AND provider='stripe' AND environment=$2 FOR UPDATE`,
+        [customer.profileId, this.environment],
+      );
+      await client.query('COMMIT');
+      const providerCustomerReference =
+        existing.rows[0]?.provider_customer_reference ??
+        (await this.provider.createCustomer({
+          email: customer.email,
+          idempotencyKey: `${input.idempotencyKey}:customer`,
+          name: customer.email,
+          referenceId: customer.profileId,
+        }));
+      if (!existing.rows[0]) {
+        await client.query('BEGIN');
+        await client.query(
+          `INSERT INTO customer_payment_provider_profiles (customer_profile_id,provider,environment,provider_customer_reference)
+           VALUES ($1,'stripe',$2,$3) ON CONFLICT (customer_profile_id,provider,environment) DO NOTHING`,
+          [customer.profileId, this.environment, providerCustomerReference],
+        );
+        await client.query('COMMIT');
+      }
+      const setup = await this.provider.createSetupIntent({
+        customerReference: providerCustomerReference,
+        idempotencyKey: input.idempotencyKey,
+      });
+      await client.query('BEGIN');
+      await this.audit(
+        client,
+        customer.userId,
+        'customer.payment_method_setup_started',
+        customer.profileId,
+        correlationId,
+        { provider: 'stripe' },
+      );
+      await client.query('COMMIT');
+      return { clientSecret: setup.clientSecret, provider: 'stripe' };
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => undefined);
+      throw error;
+    } finally {
+      await client.end();
+    }
+  }
   async savePaymentMethodForSubject(
     subject: string,
     input: z.infer<typeof savePaymentMethodSchema>,
@@ -342,8 +597,8 @@ export class PostgresDeviceCareRepository implements DeviceCareRepository {
         provider_customer_reference: string;
       }>(
         `SELECT id,provider_customer_reference FROM customer_payment_provider_profiles
-         WHERE customer_profile_id=$1 AND provider='square' AND environment=$2 FOR UPDATE`,
-        [customer.profileId, this.environment],
+         WHERE customer_profile_id=$1 AND provider=$2 AND environment=$3 FOR UPDATE`,
+        [customer.profileId, this.providerName, this.environment],
       );
       await client.query('COMMIT');
       const providerCustomerReference =
@@ -364,19 +619,20 @@ export class PostgresDeviceCareRepository implements DeviceCareRepository {
       await client.query('BEGIN');
       const profile = await client.query<{ id: string }>(
         `INSERT INTO customer_payment_provider_profiles (customer_profile_id,provider,environment,provider_customer_reference)
-         VALUES ($1,'square',$2,$3)
+         VALUES ($1,$2,$3,$4)
          ON CONFLICT (customer_profile_id,provider,environment) DO UPDATE SET updated_at=now()
          RETURNING id`,
-        [customer.profileId, this.environment, providerCustomerReference],
+        [customer.profileId, this.providerName, this.environment, providerCustomerReference],
       );
       const saved = await client.query<SavedPaymentMethod>(
         `INSERT INTO customer_payment_methods (customer_profile_id,provider_profile_id,provider,provider_card_reference,status,brand,last4,exp_month,exp_year,consented_at,idempotency_key,is_primary)
-         VALUES ($1,$2,'square',$3,$4,$5,$6,$7,$8,now(),$9,NOT EXISTS (SELECT 1 FROM customer_payment_methods WHERE customer_profile_id=$1 AND is_primary AND deactivated_at IS NULL AND status='active'))
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,now(),$10,NOT EXISTS (SELECT 1 FROM customer_payment_methods WHERE customer_profile_id=$1 AND is_primary AND deactivated_at IS NULL AND status='active'))
          ON CONFLICT (customer_profile_id,idempotency_key) DO UPDATE SET updated_at=now()
          RETURNING id,brand,last4,exp_month AS "expMonth",exp_year AS "expYear",status,is_primary AS "isPrimary"`,
         [
           customer.profileId,
           profile.rows[0]!.id,
+          this.providerName,
           card.providerCardReference,
           card.status,
           card.brand,
@@ -392,7 +648,7 @@ export class PostgresDeviceCareRepository implements DeviceCareRepository {
         'customer.payment_method_saved',
         saved.rows[0]!.id,
         correlationId,
-        { provider: 'square', status: card.status },
+        { provider: this.providerName, status: card.status },
       );
       await client.query('COMMIT');
       return saved.rows[0]!;
@@ -429,8 +685,8 @@ export class PostgresDeviceCareRepository implements DeviceCareRepository {
       }>(
         `SELECT cpm.provider_card_reference,cpp.provider_customer_reference FROM customer_payment_methods cpm
          JOIN customer_payment_provider_profiles cpp ON cpp.id=cpm.provider_profile_id
-         WHERE cpm.id=$1 AND cpm.customer_profile_id=$2 AND cpm.status='active' AND cpm.provider='square' AND cpp.environment=$3`,
-        [input.paymentMethodId, customer.profileId, this.environment],
+         WHERE cpm.id=$1 AND cpm.customer_profile_id=$2 AND cpm.status='active' AND cpm.provider=$3 AND cpp.environment=$4`,
+        [input.paymentMethodId, customer.profileId, this.providerName, this.environment],
       );
       const plan = await client.query<{ id: string }>(
         `SELECT spv.id FROM subscription_plan_versions spv JOIN subscription_plans sp ON sp.id=spv.subscription_plan_id
@@ -450,7 +706,7 @@ export class PostgresDeviceCareRepository implements DeviceCareRepository {
       await client.query('BEGIN');
       const result = await client.query<DeviceCareEnrollment>(
         `INSERT INTO customer_subscriptions (customer_profile_id,subscription_plan_version_id,status,provider_subscription_reference,started_at,renewal_at,provider,provider_environment,customer_payment_method_id,enrollment_idempotency_key,provider_version,billing_user_id)
-         VALUES ($1,$2,$3,$4,now(),$5,'square',$6,$7,$8,$9,$10)
+         VALUES ($1,$2,$3,$4,now(),$5,$6,$7,$8,$9,$10,$11)
          ON CONFLICT (customer_profile_id,enrollment_idempotency_key) WHERE enrollment_idempotency_key IS NOT NULL DO NOTHING
          RETURNING id,provider_subscription_reference AS "providerSubscriptionReference",renewal_at AS "renewalAt",status`,
         [
@@ -459,6 +715,7 @@ export class PostgresDeviceCareRepository implements DeviceCareRepository {
           providerSubscription.status,
           providerSubscription.providerSubscriptionReference,
           providerSubscription.renewalAt,
+          this.providerName,
           this.environment,
           input.paymentMethodId,
           input.idempotencyKey,
@@ -472,7 +729,7 @@ export class PostgresDeviceCareRepository implements DeviceCareRepository {
         'customer.device_care_enrolled',
         result.rows[0]!.id,
         correlationId,
-        { provider: 'square', status: result.rows[0]!.status },
+        { provider: this.providerName, status: result.rows[0]!.status },
       );
       await client.query('COMMIT');
       return result.rows[0]!;
@@ -491,8 +748,8 @@ export class PostgresDeviceCareRepository implements DeviceCareRepository {
       if (!customer) return null;
       const methods = await client.query<SavedPaymentMethod>(
         `SELECT id,brand,last4,exp_month AS "expMonth",exp_year AS "expYear",status,is_primary AS "isPrimary"
-         FROM customer_payment_methods WHERE customer_profile_id=$1 AND deactivated_at IS NULL ORDER BY is_primary DESC,created_at DESC`,
-        [customer.profileId],
+         FROM customer_payment_methods WHERE customer_profile_id=$1 AND provider=$2 AND deactivated_at IS NULL ORDER BY is_primary DESC,created_at DESC`,
+        [customer.profileId, this.providerName],
       );
       return methods.rows;
     } finally {
@@ -529,8 +786,8 @@ export class PostgresDeviceCareRepository implements DeviceCareRepository {
         id: string;
         provider_subscription_reference: string;
       }>(
-        `SELECT id,provider_subscription_reference FROM customer_subscriptions WHERE customer_profile_id=$1 AND provider='square' AND provider_environment=$2 AND status IN ('pending','active','past_due','grace') AND provider_subscription_reference IS NOT NULL FOR UPDATE`,
-        [customer.profileId, this.environment],
+        `SELECT id,provider_subscription_reference FROM customer_subscriptions WHERE customer_profile_id=$1 AND provider=$2 AND provider_environment=$3 AND status IN ('pending','active','past_due','grace') AND provider_subscription_reference IS NOT NULL FOR UPDATE`,
+        [customer.profileId, this.providerName, this.environment],
       );
       await client.query(
         `INSERT INTO subscription_lifecycle_commands (customer_profile_id,action,idempotency_key,status) VALUES ($1,'primary_payment_method_changed',$2,'pending') ON CONFLICT (customer_profile_id,action,idempotency_key) DO NOTHING`,
@@ -552,8 +809,8 @@ export class PostgresDeviceCareRepository implements DeviceCareRepository {
         [paymentMethodId, customer.profileId],
       );
       await client.query(
-        `UPDATE customer_subscriptions SET customer_payment_method_id=$2,updated_at=now() WHERE customer_profile_id=$1 AND provider='square' AND provider_environment=$3 AND status IN ('pending','active','past_due','grace')`,
-        [customer.profileId, paymentMethodId, this.environment],
+        `UPDATE customer_subscriptions SET customer_payment_method_id=$2,updated_at=now() WHERE customer_profile_id=$1 AND provider=$3 AND provider_environment=$4 AND status IN ('pending','active','past_due','grace')`,
+        [customer.profileId, paymentMethodId, this.providerName, this.environment],
       );
       await client.query(
         `UPDATE subscription_lifecycle_commands SET status='completed',completed_at=now() WHERE customer_profile_id=$1 AND action='primary_payment_method_changed' AND idempotency_key=$2`,
@@ -566,7 +823,7 @@ export class PostgresDeviceCareRepository implements DeviceCareRepository {
         'customer.primary_payment_method_changed',
         paymentMethodId,
         correlationId,
-        { activeSubscriptionCount: subscriptions.rowCount ?? 0, provider: 'square' },
+        { activeSubscriptionCount: subscriptions.rowCount ?? 0, provider: this.providerName },
       );
       await client.query('COMMIT');
       return output ? this.safeMethod(output) : null;
@@ -631,7 +888,7 @@ export class PostgresDeviceCareRepository implements DeviceCareRepository {
         'customer.payment_method_removed',
         paymentMethodId,
         correlationId,
-        { provider: 'square' },
+        { provider: this.providerName },
       );
       await client.query('COMMIT');
       return 'removed';
@@ -660,9 +917,9 @@ export class PostgresDeviceCareRepository implements DeviceCareRepository {
       if (duplicate.rows[0]?.status === 'completed') {
         const existing = await client.query<DeviceCareEnrollment>(
           `SELECT id,provider_subscription_reference AS "providerSubscriptionReference",renewal_at AS "renewalAt",status
-           FROM customer_subscriptions WHERE customer_profile_id=$1 AND provider='square' AND provider_environment=$2
+           FROM customer_subscriptions WHERE customer_profile_id=$1 AND provider=$2 AND provider_environment=$3
            ORDER BY created_at DESC LIMIT 1`,
-          [customer.profileId, this.environment],
+          [customer.profileId, this.providerName, this.environment],
         );
         await client.query('COMMIT');
         return existing.rows[0] ?? null;
@@ -671,8 +928,8 @@ export class PostgresDeviceCareRepository implements DeviceCareRepository {
         id: string;
         provider_subscription_reference: string;
       }>(
-        `SELECT id,provider_subscription_reference FROM customer_subscriptions WHERE customer_profile_id=$1 AND provider='square' AND provider_environment=$2 AND status IN ('pending','active','past_due','grace') AND cancellation_requested_at IS NULL ORDER BY created_at DESC LIMIT 1 FOR UPDATE`,
-        [customer.profileId, this.environment],
+        `SELECT id,provider_subscription_reference FROM customer_subscriptions WHERE customer_profile_id=$1 AND provider=$2 AND provider_environment=$3 AND status IN ('pending','active','past_due','grace') AND cancellation_requested_at IS NULL ORDER BY created_at DESC LIMIT 1 FOR UPDATE`,
+        [customer.profileId, this.providerName, this.environment],
       );
       if (!subscription.rows[0]) {
         await client.query('ROLLBACK');
@@ -701,7 +958,7 @@ export class PostgresDeviceCareRepository implements DeviceCareRepository {
         'customer.device_care_cancellation_requested',
         subscription.rows[0].id,
         correlationId,
-        { provider: 'square' },
+        { provider: this.providerName },
       );
       await client.query('COMMIT');
       return result.rows[0]!;
@@ -719,8 +976,8 @@ export class PostgresDeviceCareRepository implements DeviceCareRepository {
     activeOnly = false,
   ): Promise<(SavedPaymentMethod & { providerCardReference: string }) | null> {
     const result = await client.query<SavedPaymentMethod & { provider_card_reference: string }>(
-      `SELECT id,brand,last4,exp_month AS "expMonth",exp_year AS "expYear",status,is_primary AS "isPrimary",provider_card_reference FROM customer_payment_methods WHERE id=$1 AND customer_profile_id=$2 AND deactivated_at IS NULL ${activeOnly ? "AND status='active'" : ''}`,
-      [id, profileId],
+      `SELECT id,brand,last4,exp_month AS "expMonth",exp_year AS "expYear",status,is_primary AS "isPrimary",provider_card_reference FROM customer_payment_methods WHERE id=$1 AND customer_profile_id=$2 AND provider=$3 AND deactivated_at IS NULL ${activeOnly ? "AND status='active'" : ''}`,
+      [id, profileId, this.providerName],
     );
     const row = result.rows[0];
     return row ? { ...row, providerCardReference: row.provider_card_reference } : null;
@@ -786,6 +1043,7 @@ function mapSubscriptionStatus(
 ): 'pending' | 'active' | 'past_due' | 'grace' | 'cancelled' {
   const normalized = status.toLowerCase();
   if (normalized === 'active') return 'active';
+  if (normalized === 'incomplete' || normalized === 'incomplete_expired') return 'pending';
   if (normalized === 'paused') return 'grace';
   if (normalized === 'canceled' || normalized === 'cancelled' || normalized === 'deactivated')
     return 'cancelled';

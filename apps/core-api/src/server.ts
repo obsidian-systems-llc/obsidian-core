@@ -22,10 +22,17 @@ import {
   loadPaymentProcessorConfiguration,
   loadSquareDeviceCareConfiguration,
   loadSquareWebhookConfiguration,
+  loadStripeDeviceCareConfiguration,
+  loadStripeWebhookConfiguration,
   PostgresPaymentRepository,
   SquarePaymentProvider,
+  StripePaymentProvider,
 } from './payments.js';
-import { PostgresDeviceCareRepository, SquareDeviceCareProvider } from './device-care.js';
+import {
+  PostgresDeviceCareRepository,
+  SquareDeviceCareProvider,
+  StripeDeviceCareProvider,
+} from './device-care.js';
 import { PostgresDeviceCareWalletRepository } from './device-care-wallet.js';
 import { PostgresRetellCallRepository } from './retell.js';
 import { loadResendEmailConfiguration, PostgresCustomerEmailOutbox } from './customer-email.js';
@@ -57,7 +64,10 @@ if (paymentConfiguration?.processor === 'worldpay')
 const paymentRepository = paymentConfiguration
   ? new PostgresPaymentRepository(
       environment.DATABASE_URL,
-      new SquarePaymentProvider(paymentConfiguration.configuration),
+      paymentConfiguration.processor === 'square'
+        ? new SquarePaymentProvider(paymentConfiguration.configuration)
+        : new StripePaymentProvider(paymentConfiguration.configuration),
+      paymentConfiguration.processor,
     )
   : undefined;
 const deviceCareConfiguration =
@@ -72,6 +82,22 @@ const deviceCareRepository =
         deviceCareConfiguration.environment,
       )
     : undefined;
+const stripeDeviceCareConfiguration =
+  paymentConfiguration?.processor === 'stripe'
+    ? loadStripeDeviceCareConfiguration(process.env)
+    : undefined;
+const stripeDeviceCareRepository =
+  paymentConfiguration?.processor === 'stripe' && stripeDeviceCareConfiguration
+    ? new PostgresDeviceCareRepository(
+        environment.DATABASE_URL,
+        new StripeDeviceCareProvider(
+          paymentConfiguration.configuration,
+          stripeDeviceCareConfiguration,
+        ),
+        stripeDeviceCareConfiguration.environment,
+        'stripe',
+      )
+    : undefined;
 const squareWebhooks = {
   sandbox: loadSquareWebhookConfiguration('sandbox', process.env),
   production: loadSquareWebhookConfiguration('production', process.env),
@@ -80,6 +106,15 @@ const squareWebhookRepository =
   squareWebhooks.sandbox || squareWebhooks.production
     ? new PostgresPaymentRepository(environment.DATABASE_URL)
     : undefined;
+const stripeWebhooks = {
+  test: loadStripeWebhookConfiguration('test', process.env),
+  production: loadStripeWebhookConfiguration('production', process.env),
+};
+const stripeWebhookRepository =
+  stripeWebhooks.test || stripeWebhooks.production
+    ? new PostgresPaymentRepository(environment.DATABASE_URL)
+    : undefined;
+const configuredDeviceCareRepository = deviceCareRepository ?? stripeDeviceCareRepository;
 const app = buildApp({
   databaseUrl: environment.DATABASE_URL,
   authorizer: new PostgresAuthorizer(environment.DATABASE_URL),
@@ -112,7 +147,9 @@ const app = buildApp({
         squareWebhooks,
       }
     : {}),
-  ...(deviceCareRepository ? { deviceCareRepository } : {}),
+  ...(configuredDeviceCareRepository
+    ? { deviceCareRepository: configuredDeviceCareRepository }
+    : {}),
   ...(accountInvitationRepository
     ? {
         accountInvitationRepository,
@@ -125,6 +162,7 @@ const app = buildApp({
         squareWebhooks,
       }
     : {}),
+  ...(stripeWebhookRepository ? { stripeWebhookRepository, stripeWebhooks } : {}),
   ...(environment.RETELL_ENABLED
     ? {
         retell: {

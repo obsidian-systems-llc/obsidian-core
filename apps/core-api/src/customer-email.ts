@@ -116,7 +116,7 @@ export async function queueDeviceCarePaymentReceipt(
     providerEventReference: string;
     providerInvoiceReference: string;
     providerSubscriptionReference: string;
-    environment: 'sandbox' | 'production';
+    environment: 'sandbox' | 'test' | 'production';
     paidAt: string;
   },
 ) {

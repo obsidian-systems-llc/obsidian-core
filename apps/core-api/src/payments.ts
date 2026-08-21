@@ -60,6 +60,20 @@ export type SquareDeviceCareConfiguration = {
   planVariationId: string;
   orderTemplateId: string;
 };
+export type StripeAdapterConfiguration = {
+  environment: 'production' | 'test';
+  secretKey: string;
+};
+export type StripeWebhookConfiguration = {
+  environment: 'production' | 'test';
+  notificationUrl: string;
+  signingSecret: string;
+  toleranceSeconds: number;
+};
+export type StripeDeviceCareConfiguration = {
+  environment: 'production' | 'test';
+  priceId: string;
+};
 export type WorldpayAdapterConfiguration = {
   baseUrl: string;
   environment: 'production' | 'try';
@@ -68,6 +82,7 @@ export type WorldpayAdapterConfiguration = {
 };
 export type PaymentProcessorConfiguration =
   | { processor: 'square'; configuration: SquareAdapterConfiguration }
+  | { processor: 'stripe'; configuration: StripeAdapterConfiguration }
   | { processor: 'worldpay'; configuration: WorldpayAdapterConfiguration };
 type PaymentEnvironment = {
   NODE_ENV?: string;
@@ -88,6 +103,16 @@ type PaymentEnvironment = {
   SQUARE_SANDBOX_DEVICE_CARE_ORDER_TEMPLATE_ID?: string;
   SQUARE_SANDBOX_WEBHOOK_NOTIFICATION_URL?: string;
   SQUARE_SANDBOX_WEBHOOK_SIGNATURE_KEY?: string;
+  STRIPE_ENVIRONMENT?: string;
+  STRIPE_TEST_SECRET_KEY?: string;
+  STRIPE_TEST_DEVICE_CARE_PRICE_ID?: string;
+  STRIPE_TEST_WEBHOOK_NOTIFICATION_URL?: string;
+  STRIPE_TEST_WEBHOOK_SIGNING_SECRET?: string;
+  STRIPE_PRODUCTION_SECRET_KEY?: string;
+  STRIPE_PRODUCTION_DEVICE_CARE_PRICE_ID?: string;
+  STRIPE_PRODUCTION_WEBHOOK_NOTIFICATION_URL?: string;
+  STRIPE_PRODUCTION_WEBHOOK_SIGNING_SECRET?: string;
+  STRIPE_WEBHOOK_TOLERANCE_SECONDS?: string;
   WORLDPAY_BASE_URL?: string;
   WORLDPAY_ENVIRONMENT?: string;
   WORLDPAY_PASSWORD?: string;
@@ -168,6 +193,63 @@ export function loadSquareDeviceCareConfiguration(
   return { environment, locationId, planVariationId, orderTemplateId };
 }
 
+export function loadStripeAdapterConfiguration(
+  source: PaymentEnvironment = process.env,
+): StripeAdapterConfiguration {
+  const environment = source.STRIPE_ENVIRONMENT ?? 'test';
+  if (environment !== 'test' && environment !== 'production')
+    throw new Error('STRIPE_ENVIRONMENT must be test or production.');
+  if (environment === 'production' && source.NODE_ENV !== 'production')
+    throw new Error('Stripe production mode requires NODE_ENV=production.');
+  const key =
+    environment === 'production'
+      ? source.STRIPE_PRODUCTION_SECRET_KEY
+      : source.STRIPE_TEST_SECRET_KEY;
+  if (!key) throw new Error(`Incomplete ${environment} Stripe configuration.`);
+  if (environment === 'production' && !key.startsWith('sk_live_'))
+    throw new Error('STRIPE_PRODUCTION_SECRET_KEY must be a live secret key.');
+  if (environment === 'test' && !key.startsWith('sk_test_'))
+    throw new Error('STRIPE_TEST_SECRET_KEY must be a test secret key.');
+  return { environment, secretKey: key };
+}
+
+/** Loads only the signing configuration necessary to accept Stripe webhooks. */
+export function loadStripeWebhookConfiguration(
+  environment: 'test' | 'production',
+  source: PaymentEnvironment = process.env,
+): StripeWebhookConfiguration | undefined {
+  const prefix = environment === 'production' ? 'STRIPE_PRODUCTION' : 'STRIPE_TEST';
+  const notificationUrl = source[`${prefix}_WEBHOOK_NOTIFICATION_URL` as keyof PaymentEnvironment];
+  const signingSecret = source[`${prefix}_WEBHOOK_SIGNING_SECRET` as keyof PaymentEnvironment];
+  if (!notificationUrl && !signingSecret) return undefined;
+  if (!notificationUrl || !signingSecret)
+    throw new Error(`Incomplete ${environment} Stripe webhook configuration.`);
+  if (!z.url().safeParse(notificationUrl).success)
+    throw new Error('Stripe webhook notification URL must be an absolute URL.');
+  if (!signingSecret.startsWith('whsec_'))
+    throw new Error('Stripe webhook signing secret must begin with whsec_.');
+  const parsedTolerance = Number(source.STRIPE_WEBHOOK_TOLERANCE_SECONDS ?? '300');
+  if (!Number.isSafeInteger(parsedTolerance) || parsedTolerance < 30 || parsedTolerance > 3600)
+    throw new Error('STRIPE_WEBHOOK_TOLERANCE_SECONDS must be an integer from 30 through 3600.');
+  return { environment, notificationUrl, signingSecret, toleranceSeconds: parsedTolerance };
+}
+
+export function loadStripeDeviceCareConfiguration(
+  source: PaymentEnvironment = process.env,
+): StripeDeviceCareConfiguration | undefined {
+  const environment = source.STRIPE_ENVIRONMENT ?? 'test';
+  if (environment !== 'test' && environment !== 'production')
+    throw new Error('STRIPE_ENVIRONMENT must be test or production.');
+  const priceId =
+    environment === 'production'
+      ? source.STRIPE_PRODUCTION_DEVICE_CARE_PRICE_ID
+      : source.STRIPE_TEST_DEVICE_CARE_PRICE_ID;
+  if (!priceId) return undefined;
+  if (!priceId.startsWith('price_'))
+    throw new Error('Stripe Device Care price ID must begin with price_.');
+  return { environment, priceId };
+}
+
 export function loadWorldpayAdapterConfiguration(
   source: PaymentEnvironment = process.env,
 ): WorldpayAdapterConfiguration {
@@ -196,9 +278,11 @@ export function loadPaymentProcessorConfiguration(
   const selected = source.PAYMENT_PROCESSOR ?? 'square';
   if (selected === 'square')
     return { processor: 'square', configuration: loadSquareAdapterConfiguration(source) };
+  if (selected === 'stripe')
+    return { processor: 'stripe', configuration: loadStripeAdapterConfiguration(source) };
   if (selected === 'worldpay' || selected === 'commerce360')
     return { processor: 'worldpay', configuration: loadWorldpayAdapterConfiguration(source) };
-  throw new Error('PAYMENT_PROCESSOR must be square, worldpay, or commerce360.');
+  throw new Error('PAYMENT_PROCESSOR must be square, stripe, worldpay, or commerce360.');
 }
 
 type FetchResponse = { ok: boolean; status: number; json(): Promise<unknown> };
@@ -320,6 +404,103 @@ export class SquarePaymentProvider implements PaymentProvider {
   }
 }
 
+const stripePaymentIntentSchema = z.object({
+  id: z.string().min(1),
+  status: z.string().min(1),
+});
+const stripeRefundSchema = z.object({ id: z.string().min(1), status: z.string().min(1) });
+
+function stripePaymentStatus(status: string): PaymentStatus {
+  switch (status) {
+    case 'succeeded':
+      return 'completed';
+    case 'canceled':
+      return 'cancelled';
+    case 'requires_payment_method':
+      return 'failed';
+    case 'processing':
+    case 'requires_action':
+    case 'requires_confirmation':
+      return 'pending';
+    default:
+      return 'pending';
+  }
+}
+function stripeRefundStatus(status: string): RefundStatus {
+  return status === 'succeeded'
+    ? 'refunded'
+    : status === 'failed'
+      ? 'failed'
+      : status === 'pending'
+        ? 'pending'
+        : 'approved';
+}
+function stripeForm(input: Record<string, string | number | boolean | undefined>): string {
+  const body = new URLSearchParams();
+  for (const [key, value] of Object.entries(input))
+    if (value !== undefined) body.set(key, String(value));
+  return body.toString();
+}
+
+/** Server-side Stripe Payment Intents adapter. It accepts only Stripe payment-method references. */
+export class StripePaymentProvider implements PaymentProvider {
+  constructor(
+    private readonly configuration: StripeAdapterConfiguration,
+    private readonly fetcher: PaymentFetch = fetch,
+  ) {}
+  async createPayment(request: PaymentRequest) {
+    const response = await this.request(
+      '/v1/payment_intents',
+      stripeForm({
+        amount: safeMinorAmount(request.amountMinor),
+        currency: request.currency.toLowerCase(),
+        payment_method: request.paymentMethodReference,
+        confirm: true,
+      }),
+      request.idempotencyKey,
+    );
+    const parsed = stripePaymentIntentSchema.safeParse(response);
+    if (!parsed.success)
+      throw new PaymentProviderError('Stripe payment response was invalid.', 502);
+    return { providerPaymentId: parsed.data.id, status: stripePaymentStatus(parsed.data.status) };
+  }
+  async refund(input: {
+    amountMinor: bigint;
+    currency: string;
+    idempotencyKey: string;
+    providerPaymentId: string;
+    reason: string;
+  }) {
+    const response = await this.request(
+      '/v1/refunds',
+      stripeForm({
+        amount: safeMinorAmount(input.amountMinor),
+        payment_intent: input.providerPaymentId,
+        reason: input.reason.length <= 500 ? input.reason : undefined,
+      }),
+      input.idempotencyKey,
+    );
+    const parsed = stripeRefundSchema.safeParse(response);
+    if (!parsed.success) throw new PaymentProviderError('Stripe refund response was invalid.', 502);
+    return { providerRefundId: parsed.data.id, status: stripeRefundStatus(parsed.data.status) };
+  }
+  private async request(path: string, body: string, idempotencyKey: string): Promise<unknown> {
+    const response = await this.fetcher(`https://api.stripe.com${path}`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${this.configuration.secretKey}`,
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Idempotency-Key': idempotencyKey,
+      },
+      body,
+    });
+    const result = await response.json();
+    if (!response.ok)
+      throw new PaymentProviderError('Stripe payment request was not accepted.', response.status);
+    return result;
+  }
+}
+
 export class PaymentProviderError extends Error {
   constructor(
     message: string,
@@ -340,6 +521,34 @@ export function verifySquareWebhookSignature(input: {
     .digest();
   const received = Buffer.from(input.signature, 'base64');
   return received.length === expected.length && timingSafeEqual(received, expected);
+}
+
+/** Verifies Stripe's timestamped v1 HMAC signature against the untouched request body. */
+export function verifyStripeWebhookSignature(input: {
+  payload: string;
+  signature: string;
+  signingSecret: string;
+  toleranceSeconds: number;
+  now?: Date;
+}): boolean {
+  const values = input.signature.split(',').reduce<Record<string, string[]>>((result, item) => {
+    const [key, value] = item.split('=', 2);
+    if (key && value) (result[key] ??= []).push(value);
+    return result;
+  }, {});
+  const timestamp = values.t?.[0];
+  if (!timestamp || !/^\d+$/.test(timestamp) || !values.v1?.length) return false;
+  const issuedAt = Number(timestamp);
+  const current = Math.floor((input.now?.getTime() ?? Date.now()) / 1000);
+  if (!Number.isSafeInteger(issuedAt) || Math.abs(current - issuedAt) > input.toleranceSeconds)
+    return false;
+  const expected = createHmac('sha256', input.signingSecret)
+    .update(`${timestamp}.${input.payload}`, 'utf8')
+    .digest();
+  return values.v1.some((candidate) => {
+    const received = Buffer.from(candidate, 'hex');
+    return received.length === expected.length && timingSafeEqual(received, expected);
+  });
 }
 
 export const squareWebhookEventSchema = z.object({
@@ -367,6 +576,23 @@ export const squareWebhookEventSchema = z.object({
     }),
   }),
 });
+export const stripeWebhookEventSchema = z.object({
+  id: z.string().min(1).max(255),
+  type: z.string().min(1).max(255),
+  created: z.number().int().nonnegative().optional(),
+  data: z.object({
+    object: z
+      .object({
+        id: z.string().min(1),
+        status: z.string().optional(),
+        subscription: z.string().optional(),
+        current_period_end: z.number().int().nonnegative().optional(),
+        canceled_at: z.number().int().nonnegative().nullable().optional(),
+        metadata: z.record(z.string(), z.string()).optional(),
+      })
+      .passthrough(),
+  }),
+});
 
 export type PaymentRepository = {
   createForSubject(
@@ -384,6 +610,11 @@ export type PaymentRepository = {
     event: z.infer<typeof squareWebhookEventSchema>,
     payload: string,
     environment?: 'sandbox' | 'production',
+  ): Promise<'processed' | 'duplicate'>;
+  processStripeWebhook(
+    event: z.infer<typeof stripeWebhookEventSchema>,
+    payload: string,
+    environment: 'test' | 'production',
   ): Promise<'processed' | 'duplicate'>;
 };
 export type PaymentOperation = {
@@ -404,6 +635,7 @@ export class PostgresPaymentRepository implements PaymentRepository {
   constructor(
     private readonly databaseUrl: string,
     private readonly provider?: PaymentProvider,
+    private readonly providerName: 'square' | 'stripe' = 'square',
   ) {}
   async createForSubject(
     subject: string,
@@ -425,8 +657,8 @@ export class PostgresPaymentRepository implements PaymentRepository {
         return null;
       }
       const existing = await client.query<PaymentOperation>(
-        'SELECT id, amount_minor::text AS "amountMinor", currency, provider_payment_reference AS "providerPaymentReference", status FROM payment_operations WHERE provider=\'square\' AND idempotency_key=$1',
-        [request.idempotencyKey],
+        'SELECT id, amount_minor::text AS "amountMinor", currency, provider_payment_reference AS "providerPaymentReference", status FROM payment_operations WHERE provider=$1 AND idempotency_key=$2',
+        [this.providerName, request.idempotencyKey],
       );
       if (existing.rows[0]) {
         await client.query('COMMIT');
@@ -434,9 +666,10 @@ export class PostgresPaymentRepository implements PaymentRepository {
       }
       const id = randomUUID();
       await client.query(
-        "INSERT INTO payment_operations (id, provider, status, currency, amount_minor, idempotency_key, created_by_user_id) VALUES ($1,'square','pending',$2,$3,$4,$5)",
+        "INSERT INTO payment_operations (id, provider, status, currency, amount_minor, idempotency_key, created_by_user_id) VALUES ($1,$2,'pending',$3,$4,$5,$6)",
         [
           id,
+          this.providerName,
           request.currency,
           request.amountMinor.toString(),
           request.idempotencyKey,
@@ -674,13 +907,103 @@ export class PostgresPaymentRepository implements PaymentRepository {
       await client.end();
     }
   }
+  async processStripeWebhook(
+    event: z.infer<typeof stripeWebhookEventSchema>,
+    payload: string,
+    environment: 'test' | 'production',
+  ): Promise<'processed' | 'duplicate'> {
+    const client = new Client({ connectionString: this.databaseUrl });
+    await client.connect();
+    try {
+      await client.query('BEGIN');
+      const stored = await client.query(
+        'INSERT INTO payment_webhook_events (provider,provider_event_reference,event_type,payload_sha256,occurred_at) VALUES ($1,$2,$3,$4,to_timestamp($5)) ON CONFLICT (provider,provider_event_reference) DO NOTHING RETURNING id',
+        [
+          'stripe',
+          event.id,
+          event.type,
+          createHash('sha256').update(payload).digest('hex'),
+          event.created ?? Math.floor(Date.now() / 1000),
+        ],
+      );
+      if (!stored.rows[0]) {
+        await client.query('ROLLBACK');
+        return 'duplicate';
+      }
+      const object = event.data.object;
+      if (event.type.startsWith('payment_intent.')) {
+        const status = stripePaymentStatus(object.status ?? '');
+        const updated = await client.query<{ id: string }>(
+          "UPDATE payment_operations SET status=$1,updated_at=now() WHERE provider='stripe' AND provider_payment_reference=$2 RETURNING id",
+          [status, object.id],
+        );
+        if (updated.rows[0])
+          await this.audit(
+            client,
+            null,
+            'payment.webhook_processed',
+            updated.rows[0].id,
+            randomUUID(),
+            { provider: 'stripe', eventType: event.type, status },
+          );
+      }
+      if (event.type.startsWith('customer.subscription.')) {
+        const status = subscriptionStatus(object.status ?? '');
+        const renewalAt = object.current_period_end
+          ? new Date(object.current_period_end * 1000).toISOString()
+          : null;
+        const updated = await client.query<{ id: string }>(
+          `UPDATE customer_subscriptions SET status=$1,renewal_at=COALESCE($2::timestamptz,renewal_at),updated_at=now(),cancelled_at=CASE WHEN $1='cancelled' THEN COALESCE(cancelled_at,now()) ELSE cancelled_at END WHERE provider='stripe' AND provider_subscription_reference=$3 AND provider_environment=$4 RETURNING id`,
+          [status, renewalAt, object.id, environment],
+        );
+        if (updated.rows[0])
+          await this.audit(
+            client,
+            null,
+            'subscription.webhook_reconciled',
+            updated.rows[0].id,
+            randomUUID(),
+            { provider: 'stripe', eventType: event.type, status },
+            'customer_subscription',
+          );
+      }
+      if (event.type === 'invoice.paid' && object.subscription) {
+        await this.accrueDeviceCareCredit(client, {
+          eventId: event.id,
+          invoiceId: object.id,
+          providerSubscriptionReference: object.subscription,
+          environment,
+          provider: 'stripe',
+        });
+        await queueDeviceCarePaymentReceipt(client, {
+          providerEventReference: event.id,
+          providerInvoiceReference: object.id,
+          providerSubscriptionReference: object.subscription,
+          environment,
+          paidAt: new Date((event.created ?? Math.floor(Date.now() / 1000)) * 1000).toISOString(),
+        });
+      }
+      await client.query(
+        "UPDATE payment_webhook_events SET processed_at=now(), status='processed' WHERE id=$1",
+        [stored.rows[0].id],
+      );
+      await client.query('COMMIT');
+      return 'processed';
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => undefined);
+      throw error;
+    } finally {
+      await client.end();
+    }
+  }
   private async accrueDeviceCareCredit(
     client: Client,
     input: {
       eventId: string;
       invoiceId: string;
       providerSubscriptionReference: string;
-      environment?: 'sandbox' | 'production';
+      environment?: 'sandbox' | 'test' | 'production';
+      provider?: 'square' | 'stripe';
     },
   ): Promise<void> {
     const subscription = await client.query<{
@@ -698,10 +1021,10 @@ export class PostgresPaymentRepository implements PaymentRepository {
          WHERE effective_from<=now() AND (effective_to IS NULL OR effective_to>now())
          ORDER BY version_number DESC LIMIT 1
        ) policy ON true
-       WHERE cs.provider='square' AND cs.provider_subscription_reference=$1
-         AND cs.status='active' AND ($2::text IS NULL OR cs.provider_environment=$2)
+       WHERE cs.provider=$1 AND cs.provider_subscription_reference=$2
+         AND cs.status='active' AND ($3::text IS NULL OR cs.provider_environment=$3)
        FOR UPDATE`,
-      [input.providerSubscriptionReference, input.environment ?? null],
+      [input.provider ?? 'square', input.providerSubscriptionReference, input.environment ?? null],
     );
     const row = subscription.rows[0];
     if (!row) return;
@@ -736,7 +1059,7 @@ export class PostgresPaymentRepository implements PaymentRepository {
       randomUUID(),
       {
         amountMinor: credit.toString(),
-        provider: 'square',
+        provider: input.provider ?? 'square',
         providerInvoiceReference: input.invoiceId,
       },
       'customer_subscription',

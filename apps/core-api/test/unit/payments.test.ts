@@ -4,8 +4,13 @@ import {
   loadSquareAdapterConfiguration,
   loadSquareDeviceCareConfiguration,
   loadSquareWebhookConfiguration,
+  loadStripeAdapterConfiguration,
+  loadStripeDeviceCareConfiguration,
+  loadStripeWebhookConfiguration,
   paymentRequestSchema,
   SquarePaymentProvider,
+  StripePaymentProvider,
+  verifyStripeWebhookSignature,
   verifySquareWebhookSignature,
 } from '../../src/payments.js';
 import { createHmac } from 'node:crypto';
@@ -17,6 +22,13 @@ const sandbox = {
   SQUARE_SANDBOX_LOCATION_ID: 'location',
   SQUARE_SANDBOX_WEBHOOK_NOTIFICATION_URL: 'https://api.example.test/v1/webhooks/square/sandbox',
   SQUARE_SANDBOX_WEBHOOK_SIGNATURE_KEY: 'signature-key',
+};
+const stripeTest = {
+  STRIPE_ENVIRONMENT: 'test',
+  STRIPE_TEST_SECRET_KEY: 'sk_test_123',
+  STRIPE_TEST_DEVICE_CARE_PRICE_ID: 'price_device_care',
+  STRIPE_TEST_WEBHOOK_NOTIFICATION_URL: 'https://api.example.test/v1/webhooks/stripe/test',
+  STRIPE_TEST_WEBHOOK_SIGNING_SECRET: 'whsec_test',
 };
 describe('payment adapter contract', () => {
   it('uses sandbox configuration and integer payment amounts', () => {
@@ -72,6 +84,28 @@ describe('payment adapter contract', () => {
       configuration: { baseUrl: 'https://try.access.worldpay.com', environment: 'try' },
     });
   });
+  it('selects Stripe with test-only configuration and Device Care price mapping', () => {
+    expect(
+      loadPaymentProcessorConfiguration({ PAYMENT_PROCESSOR: 'stripe', ...stripeTest }),
+    ).toMatchObject({ processor: 'stripe', configuration: { environment: 'test' } });
+    expect(loadStripeAdapterConfiguration(stripeTest)).toMatchObject({ environment: 'test' });
+    expect(loadStripeDeviceCareConfiguration(stripeTest)).toEqual({
+      environment: 'test',
+      priceId: 'price_device_care',
+    });
+    expect(loadStripeWebhookConfiguration('test', stripeTest)).toMatchObject({
+      environment: 'test',
+      toleranceSeconds: 300,
+    });
+    expect(() =>
+      loadStripeAdapterConfiguration({
+        ...stripeTest,
+        STRIPE_ENVIRONMENT: 'production',
+        STRIPE_PRODUCTION_SECRET_KEY: 'sk_live_123',
+        NODE_ENV: 'development',
+      }),
+    ).toThrow('NODE_ENV=production');
+  });
   it('sends only a provider token to Square and maps its response', async () => {
     const provider = new SquarePaymentProvider(
       loadSquareAdapterConfiguration(sandbox),
@@ -117,6 +151,50 @@ describe('payment adapter contract', () => {
         payload,
         signature: 'not-valid',
         signatureKey: sandbox.SQUARE_SANDBOX_WEBHOOK_SIGNATURE_KEY,
+      }),
+    ).toBe(false);
+  });
+  it('sends payment intents to Stripe with idempotency and verifies timestamped webhook signatures', async () => {
+    const provider = new StripePaymentProvider(
+      loadStripeAdapterConfiguration(stripeTest),
+      async (url, init) => {
+        expect(url).toBe('https://api.stripe.com/v1/payment_intents');
+        expect(init.headers).toMatchObject({
+          'Idempotency-Key': '11111111-1111-4111-8111-111111111111',
+        });
+        expect(String(init.body)).toContain('payment_method=pm_card');
+        return { ok: true, status: 200, json: async () => ({ id: 'pi_123', status: 'succeeded' }) };
+      },
+    );
+    await expect(
+      provider.createPayment({
+        amountMinor: 1500n,
+        currency: 'USD',
+        idempotencyKey: '11111111-1111-4111-8111-111111111111',
+        paymentMethodReference: 'pm_card',
+      }),
+    ).resolves.toEqual({ providerPaymentId: 'pi_123', status: 'completed' });
+    const payload = '{"id":"evt_123"}';
+    const timestamp = '1000';
+    const signature = createHmac('sha256', stripeTest.STRIPE_TEST_WEBHOOK_SIGNING_SECRET)
+      .update(`${timestamp}.${payload}`)
+      .digest('hex');
+    expect(
+      verifyStripeWebhookSignature({
+        payload,
+        signature: `t=${timestamp},v1=${signature}`,
+        signingSecret: stripeTest.STRIPE_TEST_WEBHOOK_SIGNING_SECRET,
+        toleranceSeconds: 300,
+        now: new Date(1_000_000),
+      }),
+    ).toBe(true);
+    expect(
+      verifyStripeWebhookSignature({
+        payload,
+        signature: `t=${timestamp},v1=invalid`,
+        signingSecret: stripeTest.STRIPE_TEST_WEBHOOK_SIGNING_SECRET,
+        toleranceSeconds: 300,
+        now: new Date(1_000_000),
       }),
     ).toBe(false);
   });

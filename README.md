@@ -91,12 +91,13 @@ permission, and `400` with a stable route-specific `INVALID_*` code for invalid 
 | POST | `/v1/customer-portal/addresses` | `customer-portal` + `customer.profile.write` | Adds an encrypted address owned by the caller. |
 | POST | `/v1/customer-portal/devices` | `customer-portal` + `customer.profile.write` | Adds an encrypted device owned by the caller. |
 | POST | `/v1/customer-portal/repair-requests` | `customer-portal` + `repair-request.create` | Creates an idempotent, customer-owned requested repair job. |
-| POST | `/v1/customer-portal/payment-methods` | `customer-portal` + `payment-method.manage` | Saves a tokenized Square card on the caller's Core-owned payment profile. |
+| POST | `/v1/customer-portal/payment-methods/setup` | `customer-portal` + `payment-method.manage` | When Stripe is selected, creates a short-lived SetupIntent for the caller's Core-linked Stripe Customer. |
+| POST | `/v1/customer-portal/payment-methods` | `customer-portal` + `payment-method.manage` | Saves a selected-provider token/reference on the caller's Core-owned payment profile. |
 | GET | `/v1/customer-portal/payment-methods` | `customer-portal` + `payment-method.read` | Lists only the caller's safe saved-card metadata. |
 | PUT | `/v1/customer-portal/payment-methods/:id/primary` | `customer-portal` + `payment-method.manage` | Sets the primary card and replaces the billing card for active Device Care subscriptions. |
-| DELETE | `/v1/customer-portal/payment-methods/:id` | `customer-portal` + `payment-method.manage` | Disables an unlinked saved Square card. |
+| DELETE | `/v1/customer-portal/payment-methods/:id` | `customer-portal` + `payment-method.manage` | Disables an unlinked saved provider payment method. |
 | POST | `/v1/customer-portal/subscriptions/device-care` | `customer-portal` + `subscription.enroll` | Enrolls the caller in the configured Device Care plan using an owned saved card. |
-| POST | `/v1/customer-portal/subscriptions/device-care/cancel` | `customer-portal` + `subscription.cancel` | Schedules cancellation at the Square billing-period boundary. |
+| POST | `/v1/customer-portal/subscriptions/device-care/cancel` | `customer-portal` + `subscription.cancel` | Schedules cancellation at the selected provider's billing-period boundary. |
 | GET | `/v1/customer-portal/device-care/wallet` | `customer-portal` + `customer.portal.read` | Returns Core-calculated Device Care credit, membership, MAX, and discount state. |
 | GET | `/v1/customer-portal/overview` | `customer-portal` + `customer.portal.read` | Returns the caller's owned portal records, excluding payment data until the portal-payment follow-up. |
 | POST | `/v1/webhooks/retell` | Public, signed Retell webhook | Verifies and replay-protects Retell call lifecycle events. |
@@ -230,6 +231,8 @@ error; inaccessible calls return `COMMUNICATION_CALL_NOT_FOUND` without leaking 
 | POST | `/v1/core-admin/payments/:id/refunds` | `core-admin` + `payment.manage` | Creates or returns an idempotent full or partial refund. |
 | POST | `/v1/webhooks/square/sandbox` | Public, signed Square sandbox webhook | Verifies, replay-protects, and records Square sandbox payment lifecycle notifications. |
 | POST | `/v1/webhooks/square/production` | Public, signed Square production webhook | Verifies, replay-protects, and records Square production payment lifecycle notifications. |
+| POST | `/v1/webhooks/stripe/test` | Public, signed Stripe test webhook | Verifies the timestamped raw-body Stripe signature, replay-protects, and records Stripe test lifecycle notifications. |
+| POST | `/v1/webhooks/stripe/production` | Public, signed Stripe production webhook | Verifies the timestamped raw-body Stripe signature, replay-protects, and records Stripe production lifecycle notifications. |
 | GET | `/v1/employee-portal/earnings-estimate` | `employee-portal` + `earnings.self.read` | Returns estimated and pending commission totals, never finalized payroll. |
 
 Write payloads use JSON. Money values are integer minor units and may be represented as decimal strings
@@ -394,6 +397,32 @@ button; `403 FORBIDDEN` is authoritative.
   not reuse one listener for both Square environments. After the custom domain is verified, update
   both the Square subscription and its matching `SQUARE_*_WEBHOOK_NOTIFICATION_URL` to the exact
   equivalent `https://api.obsidian-systems.tech/...` URL before testing again.
+- `POST /v1/webhooks/stripe/test` and `/v1/webhooks/stripe/production` are intentionally public
+  only for Stripe. Core requires the untouched JSON request body and a current `Stripe-Signature`
+  timestamped `v1` HMAC signed with the matching endpoint-specific `whsec_` secret. A valid event
+  is inserted once by provider event ID before state changes; a retry returns
+  `{ status: "duplicate" }`. Invalid or stale signatures return `403 INVALID_WEBHOOK_SIGNATURE`;
+  malformed signed events return `400 INVALID_STRIPE_WEBHOOK`. Subscribe both endpoints to at
+  least `payment_intent.succeeded`, `payment_intent.payment_failed`,
+  `customer.subscription.created`, `customer.subscription.updated`,
+  `customer.subscription.deleted`, and `invoice.paid`.
+- When `PAYMENT_PROCESSOR=stripe`, an application starts a saved-card flow with
+  `POST /v1/customer-portal/payment-methods/setup` and `{ idempotencyKey }`. Core creates or
+  reuses the customer's Stripe Customer and returns `{ provider: "stripe", clientSecret }`.
+  The application may pass only that short-lived SetupIntent client secret to Stripe.js and must
+  confirm it in the browser; it must never receive a Stripe secret key. It then calls the existing
+`POST /v1/customer-portal/payment-methods` with `{ cardholderName, idempotencyKey,
+  saveCardConsent: true, sourceId: "seti_..." }`. Core verifies that the succeeded SetupIntent is
+  attached to that caller's Stripe Customer, then records only safe card display metadata and the
+  provider reference. Saved-method reads and mutations are scoped to the active selected provider,
+  so a historical Square card can never be used against a Stripe subscription (or the reverse).
+  The same payment-method, primary-card, Device Care enrollment, cancellation,
+  and wallet routes remain the client contract for Square and Stripe.
+- `POST /v1/core-admin/payments` accepts selected-provider references: a Square payment token/card
+  reference when Square is active, or a Stripe `pm_...` PaymentMethod reference when Stripe is
+  active. Stripe returns the PaymentIntent reference and status; `requires_action` is returned as
+  `pending` rather than being treated as a completed payment. Applications must wait for the signed
+  webhook lifecycle event before treating any asynchronous payment as final.
 
 #### Executive routes
 
@@ -423,7 +452,10 @@ button; `403 FORBIDDEN` is authoritative.
 | `PORT` | Managed-platform runtime | When injected by a platform such as Render, Core binds to this port on `0.0.0.0`; local development continues to use `CORE_API_HOST` and `CORE_API_PORT`. |
 | `BOOTSTRAP_SUPER_ADMIN*` | Controlled bootstrap only | One-time local/controlled super-admin provisioning; never set in normal application runtime. |
 | `PAYMENTS_ENABLED` | No, default `false` | Explicit safety gate. Set `true` only after selected-provider credentials, public webhook subscription, and sandbox verification are complete. |
-| `PAYMENT_PROCESSOR` | No | Payment-provider selector: `square`, `worldpay`, or `commerce360`. `commerce360` is normalized to the Access Worldpay adapter configuration. Default: `square`. |
+| `PAYMENT_PROCESSOR` | No | Payment-provider selector: `square`, `stripe`, `worldpay`, or `commerce360`. `commerce360` is normalized to the Access Worldpay adapter configuration. Default: `square`. |
+| `STRIPE_ENVIRONMENT`, `STRIPE_*_SECRET_KEY` | Required when `PAYMENTS_ENABLED=true` and Stripe is selected | Server-only Stripe processor selection and matching test/live secret key. Production is rejected unless `NODE_ENV=production`. |
+| `STRIPE_*_DEVICE_CARE_PRICE_ID` | Required to activate Stripe Device Care | The matching recurring $15 Stripe Price ID; Core owns its subscription lifecycle. |
+| `STRIPE_*_WEBHOOK_NOTIFICATION_URL`, `STRIPE_*_WEBHOOK_SIGNING_SECRET`, `STRIPE_WEBHOOK_TOLERANCE_SECONDS` | Required to accept Stripe webhook events | Exact endpoint URL, endpoint `whsec_` secret, and timestamp replay tolerance (30–3600 seconds; default 300). |
 | `SQUARE_*` | Required when `PAYMENTS_ENABLED=true` and Square is selected | Server-only access token, application/location IDs, API version, exact webhook notification URL, and webhook signature key. |
 | `RETELL_ENABLED`, `RETELL_API_KEY`, `RETELL_WEBHOOK_SECRET` | Retell is opt-in; API key required when enabled | Server-only Retell integration configuration. Retell's current webhook signature uses its designated webhook API key; the optional secret is reserved only for a separate provider-issued value. |
 | `CUSTOMER_EMAIL_ENABLED` | No, default `false` | Explicit server-side opt-in for Resend transactional customer mail. When `true`, `RESEND_API_KEY` and `RESEND_FROM_EMAIL` are required. |
@@ -504,11 +536,23 @@ until a separately reviewed ownership-transfer procedure exists.
 
 ### Interchangeable payment-provider configuration
 
-Core owns a provider-neutral payment interface. Set `PAYMENT_PROCESSOR=square` for Square or set
-`PAYMENT_PROCESSOR=worldpay` or `PAYMENT_PROCESSOR=commerce360` for the Access Worldpay path used
-by Commerce360. The latter two values are intentionally equivalent; internally they select the
-`worldpay` adapter. This selector validates the chosen adapter configuration and rejects production
-provider modes unless `NODE_ENV=production`.
+Core owns a provider-neutral payment interface. Set `PAYMENT_PROCESSOR=square` for Square,
+`PAYMENT_PROCESSOR=stripe` for Stripe, or `PAYMENT_PROCESSOR=worldpay` / `commerce360` for the
+reserved Access Worldpay path. The latter two values intentionally select the same `worldpay`
+adapter. This selector validates the chosen adapter configuration and rejects production provider
+modes unless `NODE_ENV=production`. Exactly one selected provider may initiate charges or Device
+Care lifecycle actions at a time; provider references remain on each historical operation, payment
+method, and subscription so changing the selector does not rewrite or misroute prior records.
+
+For Stripe, set `STRIPE_ENVIRONMENT=test` while developing and use the matching
+`STRIPE_TEST_SECRET_KEY`, Device Care recurring `price_...` ID, webhook URL, and endpoint-specific
+`STRIPE_TEST_WEBHOOK_SIGNING_SECRET`. Use the parallel `STRIPE_PRODUCTION_*` values only after the
+live webhook endpoint passes a signed-event test. Vercel apps may store only the matching
+publishable `pk_...` key as a public build variable; Core's `sk_...` and `whsec_...` values belong
+exclusively in Render secret storage. A customer-card save starts at Core's SetupIntent route,
+then Stripe.js confirms the returned client secret and Core verifies/records the completed intent.
+Do not create Stripe Customers, subscriptions, PaymentIntents, or webhook state directly from any
+application.
 
 For Square, populate the existing sandbox or production application, location, and access-token
 variables, including the matching `SQUARE_*_WEBHOOK_NOTIFICATION_URL` and
