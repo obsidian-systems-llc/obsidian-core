@@ -95,6 +95,7 @@ import {
   enrollDeviceCareSchema,
   paymentMethodMutationSchema,
   savePaymentMethodSchema,
+  DeviceCareCancellationProviderUnavailableError,
   DeviceCareProviderError,
   type DeviceCareRepository,
 } from './device-care.js';
@@ -2054,6 +2055,14 @@ export function buildApp({
                 );
               } catch (error) {
                 request.log.warn({ error }, 'Device Care cancellation was rejected.');
+                if (error instanceof DeviceCareCancellationProviderUnavailableError)
+                  return reply.code(409).send({
+                    error: {
+                      code: 'LEGACY_SUBSCRIPTION_PROVIDER_UNAVAILABLE',
+                      message:
+                        'This subscription provider is not currently configured for cancellation.',
+                    },
+                  });
                 return reply.code(502).send({
                   error: {
                     code: 'PAYMENT_PROVIDER_UNAVAILABLE',

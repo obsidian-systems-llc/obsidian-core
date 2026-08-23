@@ -404,7 +404,10 @@ priorities:
       verified Square Catalog/Invoice provisioning and are tracked by CORE-021 and CORE-022. The
       Worldpay/Commerce360 configuration remains selectable through PAYMENT_PROCESSOR but is
       intentionally disabled until provider-issued credentials, signed-webhook details, and sandbox
-      verification are available. After CORE-032 is done, return to CORE-018 and review CORE-019,
+      verification are available. When Stripe is selected, the customer cancellation boundary also
+      resolves a stored historical Square agreement through a separately configured, server-only
+      Square adapter; the portal never selects or calls a payment provider. After CORE-032 is done,
+      return to CORE-018 and review CORE-019,
       CORE-021, and CORE-022 for their provider-dependent finalization work.
   - id: CORE-033
     title: Authorization administration and access-governance workflows (superseded by CORE-029-01)

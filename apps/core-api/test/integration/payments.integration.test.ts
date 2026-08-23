@@ -3,6 +3,10 @@ import { config } from 'dotenv';
 import { Client } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { PostgresPaymentRepository, type PaymentProvider } from '../../src/payments.js';
+import {
+  PostgresDeviceCareRepository,
+  type DeviceCareCardProvider,
+} from '../../src/device-care.js';
 import { PostgresDeviceCareWalletRepository } from '../../src/device-care-wallet.js';
 
 config({ path: new URL('../../../../.env', import.meta.url) });
@@ -44,6 +48,11 @@ describe.skipIf(!databaseUrl)('PostgreSQL payment repository', () => {
         'DELETE FROM device_care_credit_ledger WHERE customer_subscription_id=$1',
         [subscriptionId],
       );
+    if (customerProfileId)
+      await client.query(
+        'DELETE FROM subscription_lifecycle_commands WHERE customer_profile_id=$1',
+        [customerProfileId],
+      );
     if (subscriptionId)
       await client.query('DELETE FROM customer_subscriptions WHERE id=$1', [subscriptionId]);
     if (customerProfileId)
@@ -65,6 +74,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL payment repository', () => {
     );
     await client.query('DELETE FROM payment_refunds WHERE payment_operation_id=$1', [paymentId]);
     await client.query('DELETE FROM payment_operations WHERE id=$1', [paymentId]);
+    await client.query('DELETE FROM audit_events WHERE actor_user_id=$1', [userId]);
     await client.query('DELETE FROM identities WHERE user_id=$1', [userId]);
     await client.query('DELETE FROM users WHERE id=$1', [userId]);
     await client.end();
@@ -152,6 +162,64 @@ describe.skipIf(!databaseUrl)('PostgreSQL payment repository', () => {
       membershipActive: true,
       usable: false,
     });
+    let cancelledReference: string | undefined;
+    let cancellationCalls = 0;
+    const legacySquareProvider: DeviceCareCardProvider = {
+      cancelSubscription: async (reference) => {
+        cancellationCalls += 1;
+        cancelledReference = reference;
+        return { renewalAt: null };
+      },
+      createCustomer: async () => 'unused',
+      createSubscription: async () => ({
+        providerSubscriptionReference: 'unused',
+        renewalAt: null,
+        status: 'active',
+        version: null,
+      }),
+      disableCard: async () => undefined,
+      saveCard: async () => ({
+        brand: null,
+        expMonth: null,
+        expYear: null,
+        last4: null,
+        providerCardReference: 'unused',
+        status: 'active',
+      }),
+      updateSubscriptionCard: async () => ({ version: null }),
+    };
+    const currentStripeProvider: DeviceCareCardProvider = {
+      ...legacySquareProvider,
+      cancelSubscription: async () => {
+        throw new Error('The current Stripe adapter must not cancel a stored Square agreement.');
+      },
+    };
+    const deviceCareRepository = new PostgresDeviceCareRepository(
+      databaseUrl!,
+      currentStripeProvider,
+      'production',
+      'stripe',
+      [{ adapter: legacySquareProvider, environment: 'sandbox', provider: 'square' }],
+    );
+    const cancellationKey = randomUUID();
+    await expect(
+      deviceCareRepository.cancelForSubject(
+        subject,
+        { idempotencyKey: cancellationKey },
+        randomUUID(),
+      ),
+    ).resolves.toMatchObject({ id: subscriptionId, status: 'active' });
+    expect(cancelledReference).toBe(`square-subscription-${userId}`);
+    expect(cancellationCalls).toBe(1);
+    await expect(
+      deviceCareRepository.cancelForSubject(
+        subject,
+        { idempotencyKey: cancellationKey },
+        randomUUID(),
+      ),
+    ).resolves.toMatchObject({ id: subscriptionId });
+    expect(cancelledReference).toBe(`square-subscription-${userId}`);
+    expect(cancellationCalls).toBe(1);
     await expect(
       client.query<{ event_type: string; environment: string; amount: string }>(
         "SELECT event_type,environment,template_data->>'amountMinor' AS amount FROM customer_email_deliveries WHERE customer_profile_id=$1",

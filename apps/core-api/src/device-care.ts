@@ -37,7 +37,7 @@ export type DeviceCareEnrollment = {
   status: string;
 };
 
-type DeviceCareCardProvider = {
+export type DeviceCareCardProvider = {
   createSetupIntent?(input: {
     customerReference: string;
     idempotencyKey: string;
@@ -72,6 +72,19 @@ type DeviceCareCardProvider = {
   }): Promise<{ version: bigint | null }>;
   disableCard(providerCardReference: string): Promise<void>;
 };
+
+export type DeviceCareProviderBinding = {
+  adapter: DeviceCareCardProvider;
+  environment: 'sandbox' | 'test' | 'production';
+  provider: 'square' | 'stripe';
+};
+
+/** The stored provider cannot be reached with the currently configured server adapters. */
+export class DeviceCareCancellationProviderUnavailableError extends Error {
+  constructor() {
+    super('The subscription provider is not configured for Core-managed cancellation.');
+  }
+}
 
 const customerResponseSchema = z.object({ customer: z.object({ id: z.string().min(1) }) });
 const cardResponseSchema = z.object({
@@ -514,6 +527,7 @@ export class PostgresDeviceCareRepository implements DeviceCareRepository {
     private readonly provider: DeviceCareCardProvider,
     private readonly environment: 'sandbox' | 'test' | 'production',
     private readonly providerName: 'square' | 'stripe' = 'square',
+    private readonly legacyCancellationProviders: readonly DeviceCareProviderBinding[] = [],
   ) {}
   async createPaymentMethodSetupForSubject(
     subject: string,
@@ -917,36 +931,47 @@ export class PostgresDeviceCareRepository implements DeviceCareRepository {
       if (duplicate.rows[0]?.status === 'completed') {
         const existing = await client.query<DeviceCareEnrollment>(
           `SELECT id,provider_subscription_reference AS "providerSubscriptionReference",renewal_at AS "renewalAt",status
-           FROM customer_subscriptions WHERE customer_profile_id=$1 AND provider=$2 AND provider_environment=$3
+           FROM customer_subscriptions WHERE customer_profile_id=$1
            ORDER BY created_at DESC LIMIT 1`,
-          [customer.profileId, this.providerName, this.environment],
+          [customer.profileId],
         );
         await client.query('COMMIT');
         return existing.rows[0] ?? null;
       }
       const subscription = await client.query<{
         id: string;
+        provider: 'square' | 'stripe';
+        provider_environment: 'sandbox' | 'test' | 'production';
         provider_subscription_reference: string;
       }>(
-        `SELECT id,provider_subscription_reference FROM customer_subscriptions WHERE customer_profile_id=$1 AND provider=$2 AND provider_environment=$3 AND status IN ('pending','active','past_due','grace') AND cancellation_requested_at IS NULL ORDER BY created_at DESC LIMIT 1 FOR UPDATE`,
-        [customer.profileId, this.providerName, this.environment],
+        `SELECT id,provider,provider_environment,provider_subscription_reference
+         FROM customer_subscriptions
+         WHERE customer_profile_id=$1 AND status IN ('pending','active','past_due','grace')
+           AND cancellation_requested_at IS NULL AND provider_subscription_reference IS NOT NULL
+         ORDER BY created_at DESC LIMIT 1 FOR UPDATE`,
+        [customer.profileId],
       );
       if (!subscription.rows[0]) {
         await client.query('ROLLBACK');
         return null;
       }
+      const provider = this.cancellationProvider(
+        subscription.rows[0].provider,
+        subscription.rows[0].provider_environment,
+      );
+      if (!provider) throw new DeviceCareCancellationProviderUnavailableError();
       await client.query(
         `INSERT INTO subscription_lifecycle_commands (customer_profile_id,action,idempotency_key,status) VALUES ($1,'cancellation_requested',$2,'pending') ON CONFLICT (customer_profile_id,action,idempotency_key) DO NOTHING`,
         [customer.profileId, input.idempotencyKey],
       );
       await client.query('COMMIT');
-      const provider = await this.provider.cancelSubscription(
+      const cancellation = await provider.cancelSubscription(
         subscription.rows[0].provider_subscription_reference,
       );
       await client.query('BEGIN');
       const result = await client.query<DeviceCareEnrollment>(
         `UPDATE customer_subscriptions SET cancellation_requested_at=now(),renewal_at=COALESCE($2,renewal_at),updated_at=now() WHERE id=$1 RETURNING id,provider_subscription_reference AS "providerSubscriptionReference",renewal_at AS "renewalAt",status`,
-        [subscription.rows[0].id, provider.renewalAt],
+        [subscription.rows[0].id, cancellation.renewalAt],
       );
       await client.query(
         `UPDATE subscription_lifecycle_commands SET status='completed',completed_at=now() WHERE customer_profile_id=$1 AND action='cancellation_requested' AND idempotency_key=$2`,
@@ -958,7 +983,10 @@ export class PostgresDeviceCareRepository implements DeviceCareRepository {
         'customer.device_care_cancellation_requested',
         subscription.rows[0].id,
         correlationId,
-        { provider: this.providerName },
+        {
+          provider: subscription.rows[0].provider,
+          providerEnvironment: subscription.rows[0].provider_environment,
+        },
       );
       await client.query('COMMIT');
       return result.rows[0]!;
@@ -968,6 +996,15 @@ export class PostgresDeviceCareRepository implements DeviceCareRepository {
     } finally {
       await client.end();
     }
+  }
+  private cancellationProvider(
+    provider: DeviceCareProviderBinding['provider'],
+    environment: DeviceCareProviderBinding['environment'],
+  ): DeviceCareCardProvider | undefined {
+    if (provider === this.providerName && environment === this.environment) return this.provider;
+    return this.legacyCancellationProviders.find(
+      (candidate) => candidate.provider === provider && candidate.environment === environment,
+    )?.adapter;
   }
   private async method(
     client: Client,

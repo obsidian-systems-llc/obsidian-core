@@ -98,7 +98,7 @@ permission, and `400` with a stable route-specific `INVALID_*` code for invalid 
 | PUT | `/v1/customer-portal/payment-methods/:id/primary` | `customer-portal` + `payment-method.manage` | Sets the primary card and replaces the billing card for active Device Care subscriptions. |
 | DELETE | `/v1/customer-portal/payment-methods/:id` | `customer-portal` + `payment-method.manage` | Disables an unlinked saved provider payment method. |
 | POST | `/v1/customer-portal/subscriptions/device-care` | `customer-portal` + `subscription.enroll` | Enrolls the caller in the configured Device Care plan using an owned saved card. |
-| POST | `/v1/customer-portal/subscriptions/device-care/cancel` | `customer-portal` + `subscription.cancel` | Schedules cancellation at the selected provider's billing-period boundary. |
+| POST | `/v1/customer-portal/subscriptions/device-care/cancel` | `customer-portal` + `subscription.cancel` | Schedules cancellation at the stored agreement provider's billing-period boundary, including configured legacy Square agreements after Stripe becomes the selected processor. |
 | GET | `/v1/customer-portal/device-care/wallet` | `customer-portal` + `customer.portal.read` | Returns Core-calculated Device Care credit, membership, MAX, and discount state. |
 | GET | `/v1/customer-portal/overview` | `customer-portal` + `customer.portal.read` | Returns the caller's owned portal records, excluding payment data until the portal-payment follow-up. |
 | POST | `/v1/webhooks/retell` | Public, signed Retell webhook | Verifies and replay-protects Retell call lifecycle events. |
@@ -457,7 +457,7 @@ button; `403 FORBIDDEN` is authoritative.
 | `STRIPE_ENVIRONMENT`, `STRIPE_*_SECRET_KEY` | Required when `PAYMENTS_ENABLED=true` and Stripe is selected | Server-only Stripe processor selection and matching test/live secret key. Production is rejected unless `NODE_ENV=production`. |
 | `STRIPE_*_DEVICE_CARE_PRICE_ID` | Required to activate Stripe Device Care | The matching recurring $15 Stripe Price ID; Core owns its subscription lifecycle. |
 | `STRIPE_*_WEBHOOK_NOTIFICATION_URL`, `STRIPE_*_WEBHOOK_SIGNING_SECRET`, `STRIPE_WEBHOOK_TOLERANCE_SECONDS` | Required to accept Stripe webhook events | Exact endpoint URL, endpoint `whsec_` secret, and timestamp replay tolerance (30–3600 seconds; default 300). |
-| `SQUARE_*` | Required when `PAYMENTS_ENABLED=true` and Square is selected | Server-only access token, application/location IDs, API version, exact webhook notification URL, and webhook signature key. |
+| `SQUARE_*` | Required when `PAYMENTS_ENABLED=true` and Square is selected; retained temporarily for legacy Square Device Care cancellation after moving to Stripe | Server-only access token, application/location IDs, API version, exact webhook notification URL, signature key, and matching Device Care catalog mapping. Keep the matching `SQUARE_ENVIRONMENT` configured until every Core-owned Square agreement is cancelled or explicitly migrated. |
 | `RETELL_ENABLED`, `RETELL_API_KEY`, `RETELL_WEBHOOK_SECRET` | Retell is opt-in; API key required when enabled | Server-only Retell integration configuration. Retell's current webhook signature uses its designated webhook API key; the optional secret is reserved only for a separate provider-issued value. |
 | `CUSTOMER_EMAIL_ENABLED` | No, default `false` | Explicit server-side opt-in for Resend transactional customer mail. When `true`, `RESEND_API_KEY` and `RESEND_FROM_EMAIL` are required. |
 | `RESEND_API_KEY`, `RESEND_FROM_EMAIL`, `RESEND_REPLY_TO` | Required/optional when customer email is enabled | Resend API credential, verified sender identity, and optional reply-to mailbox. These values stay in managed server secret storage and never reach a GUI. |
@@ -779,8 +779,14 @@ subscription owned by that customer. `DELETE /v1/customer-portal/payment-methods
 same idempotency body and disables the Square card only when no pending, active, past-due, or grace
 subscription references it; otherwise it returns `409 PAYMENT_METHOD_IN_USE`. `POST
 /v1/customer-portal/subscriptions/device-care/cancel` accepts `{ idempotencyKey }` and schedules
-cancellation through Square at the end of the active billing period. The agreement remains active
-until Square reports the final canceled state, so its billing card cannot be removed prematurely.
+cancellation at the stored agreement provider's end of billing period. The portal never calls Square
+or Stripe directly. When `PAYMENT_PROCESSOR=stripe`, Core can still cancel a historical Square
+agreement only when the matching `SQUARE_ENVIRONMENT` and its server-only Square
+credentials/catalog mapping remain configured. Core resolves provider and environment from its own
+subscription record; it never trusts a provider selection from the browser. If retired Square
+credentials are intentionally removed, Core returns `409 LEGACY_SUBSCRIPTION_PROVIDER_UNAVAILABLE`
+without changing the agreement. The agreement remains active until its provider reports the final
+canceled state, so its billing card cannot be removed prematurely.
 
 Subscription plans and their effective-dated versions use integer minor-unit prices, cadence, and
 optional provider references. Customer subscriptions preserve the selected plan version and safe

@@ -20,6 +20,7 @@ import { PostgresReportingRepository } from './reporting.js';
 import { PostgresCompensationRepository } from './compensation.js';
 import {
   loadPaymentProcessorConfiguration,
+  loadSquareAdapterConfiguration,
   loadSquareDeviceCareConfiguration,
   loadSquareWebhookConfiguration,
   loadStripeDeviceCareConfiguration,
@@ -71,16 +72,34 @@ const paymentRepository = paymentConfiguration
       paymentConfiguration.processor,
     )
   : undefined;
-const deviceCareConfiguration =
-  paymentConfiguration?.processor === 'square'
-    ? loadSquareDeviceCareConfiguration(process.env)
+const squareDeviceCareConfiguration = loadSquareDeviceCareConfiguration(process.env);
+const squareAdapterConfiguration = (() => {
+  if (!environment.PAYMENTS_ENABLED || !squareDeviceCareConfiguration) return undefined;
+  try {
+    return paymentConfiguration?.processor === 'square'
+      ? paymentConfiguration.configuration
+      : loadSquareAdapterConfiguration(process.env);
+  } catch (error) {
+    // A Stripe deployment may retain historical Square agreements. Do not prevent startup when
+    // their retired Square credentials have been removed; cancellation returns a stable Core error.
+    console.warn('Square legacy Device Care cancellation is unavailable.', {
+      message: error instanceof Error ? error.message : 'Unknown configuration error.',
+    });
+    return undefined;
+  }
+})();
+const squareDeviceCareProvider =
+  squareAdapterConfiguration && squareDeviceCareConfiguration
+    ? new SquareDeviceCareProvider(squareAdapterConfiguration, squareDeviceCareConfiguration)
     : undefined;
 const deviceCareRepository =
-  paymentConfiguration?.processor === 'square' && deviceCareConfiguration
+  paymentConfiguration?.processor === 'square' &&
+  squareDeviceCareProvider &&
+  squareDeviceCareConfiguration
     ? new PostgresDeviceCareRepository(
         environment.DATABASE_URL,
-        new SquareDeviceCareProvider(paymentConfiguration.configuration, deviceCareConfiguration),
-        deviceCareConfiguration.environment,
+        squareDeviceCareProvider,
+        squareDeviceCareConfiguration.environment,
       )
     : undefined;
 const stripeDeviceCareConfiguration =
@@ -97,6 +116,15 @@ const stripeDeviceCareRepository =
         ),
         stripeDeviceCareConfiguration.environment,
         'stripe',
+        squareDeviceCareProvider && squareDeviceCareConfiguration
+          ? [
+              {
+                adapter: squareDeviceCareProvider,
+                environment: squareDeviceCareConfiguration.environment,
+                provider: 'square',
+              },
+            ]
+          : [],
       )
     : undefined;
 const squareWebhooks = {
