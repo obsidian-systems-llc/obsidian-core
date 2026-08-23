@@ -1295,6 +1295,30 @@ Create versioned records for:
 - Fees
 - Taxes
 - Discounts
+
+### Step 4.2: Commerce catalog, inventory, orders, and fulfillment
+
+`CORE-043` will extend the existing versioned catalog into the Core-owned online-commerce
+system for refurbished devices, accessories, apparel, parts, services, and other merchandise.
+It will add product variants/SKUs, condition, media references, categories, tags, online
+publication state, taxability, availability by store/location, inventory movements and
+reservations, carts, orders, shipping/pickup, fulfillment, returns, refunds, and customer order
+history. Storefronts may render and initiate requests, but Core will remain authoritative for
+sellable price, stock availability, inventory changes, order state, payment finalization, and
+fulfillment reconciliation.
+
+The design includes a provider-neutral supplier/fulfillment adapter boundary. Printful is the
+first planned print-on-demand adapter: Core will synchronize reviewed product/variant references,
+submit paid fulfillment orders, and reconcile product, fulfillment, shipment, and failure events
+through its server-side API and webhooks. Printful-imported items are not automatically published;
+an authorized Core administrator must review and publish them, and Core retains Obsidian's
+customer-visible selling price.
+
+WGP and Injured Gadgets are planned supplier/parts adapters only after each company provides
+official API access, data-use permission, authentication and rate-limit details, and a test
+workflow. Core will not scrape supplier sites or expose supplier credentials to an application.
+Their future imports may inform cost and availability, but never silently overwrite Core's
+approved selling prices or historical records.
 - Eligibility rules
 - Store or district overrides
 

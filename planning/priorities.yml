@@ -552,3 +552,26 @@ priorities:
       Square remains selectable for existing operations. Core does not automatically migrate saved
       cards, subscriptions, or customer consent between processors; that requires an explicit
       customer re-consent/migration priority before switching existing active subscriptions.
+  - id: CORE-043
+    title: Commerce catalog, inventory, orders, and fulfillment-provider integration
+    status: proposed
+    priority: 42
+    dependencies: [CORE-010, CORE-028, CORE-042]
+    acceptance_criteria:
+      - Core evolves its existing effective-dated catalog into a full itemized commerce catalog for refurbished devices, accessories, apparel, parts, services, and other merchandise without creating a separate storefront source of truth.
+      - Authorized administrative APIs manage products, variants/SKUs, condition, media references, categories, tags, online visibility, taxability, store availability, inventory locations, stock adjustments, reservations, and immutable price/cost history with audit records and concurrency-safe inventory control.
+      - Customer/public read APIs expose only explicitly published, sellable products and safe inventory availability; they support pagination, filters, search, product detail, variants, images, and stable availability semantics without revealing cost, supplier data, or internal notes.
+      - Core owns carts, orders, fulfillment, returns, refunds, pickup/shipping selections, order history, and payment-state reconciliation through the selected provider adapter; client applications never calculate authoritative prices, decrement stock, or finalize payment state.
+      - A provider-neutral supplier/fulfillment boundary persists external product, variant, order, shipment, and webhook references separately from Core records. Printful is the initial supported print-on-demand adapter, using server-only scoped credentials, product/variant synchronization, order submission, idempotent signed-or-verified webhook handling, shipment tracking, and failure reconciliation.
+      - Supplier price or availability imports from WGP and Injured Gadgets are not implemented until each provider supplies official API credentials, permitted data-use terms, rate limits, authentication, webhook/polling capability, and a stable test workflow. The adapter boundary must allow those providers to be added without coupling their data to storefront clients.
+      - Product, inventory, order, fulfillment, payment, authorization, webhook, concurrency, migration, and provider-adapter behavior has unit, real-PostgreSQL integration, and contract coverage; README documents every route, permission, provider configuration, reconciliation behavior, and operational runbook.
+    implementation_notes: >-
+      Printful's current official API supports scoped private/OAuth access to store products,
+      sync products/variants, orders, and webhooks. Store its token only in managed Core server
+      secrets and treat Printful as a fulfillment provider, not the authoritative commerce record.
+      Core remains authoritative for published assortment, customer-visible price, inventory
+      reservation, order lifecycle, payment state, and audit history. Product imports must be
+      reviewable before publication: do not automatically expose a Printful product or any future
+      supplier item to customers, and do not trust provider pricing as Obsidian's selling price.
+      WGP and Injured Gadgets are prospective parts/supplier adapters pending written provider
+      approval and official documentation; no scraping or unsupported automation is authorized.
