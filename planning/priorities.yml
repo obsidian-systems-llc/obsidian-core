@@ -218,9 +218,18 @@ priorities:
       invoices, receipts, payment status, and the final portal payment contract.
   - id: CORE-019
     title: Public website account and protection enrollment
-    status: blocked
+    status: done
     priority: 19
     dependencies: [CORE-013]
+    acceptance_criteria:
+      - The public website can read Core-owned current Device Care enrollment terms without recreating plan price, cadence, or Repair Credit thresholds in a client application
+      - Authenticated customer registration, saved-card collection, and enrollment reuse the existing Core customer-portal payment contract; no website-specific processor path or unauthenticated enrollment write is introduced
+      - The public contract documents its public offer route, enrollment handoff, CORS requirements, stable failure behavior, and production payment-test dependency
+    implementation_notes: >-
+      The public website reads only the active Core-owned offer and hands authenticated customers
+      to the existing customer-portal registration, Stripe SetupIntent, saved-method, and Device
+      Care enrollment routes. The live Stripe transaction/webhook confirmation remains CORE-018 and
+      CORE-032 validation work; it does not create a second public payment path.
   - id: CORE-020
     title: Payroll export integration
     status: blocked

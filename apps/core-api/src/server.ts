@@ -34,6 +34,7 @@ import {
   StripeDeviceCareProvider,
 } from './device-care.js';
 import { PostgresDeviceCareWalletRepository } from './device-care-wallet.js';
+import { PostgresPublicDeviceCareOfferRepository } from './public-device-care-offer.js';
 import { PostgresRetellCallRepository } from './retell.js';
 import { loadResendEmailConfiguration, PostgresCustomerEmailOutbox } from './customer-email.js';
 import { PostgresAccountInvitationRepository } from './account-invitations.js';
@@ -141,6 +142,9 @@ const app = buildApp({
   reportingRepository: new PostgresReportingRepository(environment.DATABASE_URL),
   compensationRepository: new PostgresCompensationRepository(environment.DATABASE_URL),
   deviceCareWalletRepository: new PostgresDeviceCareWalletRepository(environment.DATABASE_URL),
+  publicDeviceCareOfferRepository: new PostgresPublicDeviceCareOfferRepository(
+    environment.DATABASE_URL,
+  ),
   ...(paymentRepository
     ? {
         paymentRepository,

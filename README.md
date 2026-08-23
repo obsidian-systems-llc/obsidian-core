@@ -52,6 +52,7 @@ permission, and `400` with a stable route-specific `INVALID_*` code for invalid 
 | --- | --- | --- | --- |
 | GET | `/health` | Public | API liveness. |
 | GET | `/ready` | Public | Database readiness. |
+| GET | `/v1/public/device-care/offer` | Public, read-only | Returns active versioned Device Care enrollment price/cadence plus Repair Credit accrual, unlock, and cap terms. |
 | GET | `/v1/identity/me` | Authenticated | Returns the Auth0 subject recognized by Core. |
 | GET | `/v1/core-admin/authorization/access` | `core-admin` + `authorization.read` | Verifies Core Admin access. |
 | GET | `/v1/core-admin/authorization/roles` | `core-admin` + `authorization.manage`, step-up | Lists active application roles and permissions. |
@@ -553,6 +554,44 @@ exclusively in Render secret storage. A customer-card save starts at Core's Setu
 then Stripe.js confirms the returned client secret and Core verifies/records the completed intent.
 Do not create Stripe Customers, subscriptions, PaymentIntents, or webhook state directly from any
 application.
+
+### Public website Device Care enrollment
+
+`GET /v1/public/device-care/offer` is the public website's read-only source for the current
+enrollment offer. It returns only versioned, non-sensitive terms:
+
+```json
+{
+  "plan": {
+    "key": "device-care",
+    "name": "Obsidian Device Care",
+    "amountMinor": "1500",
+    "currency": "USD",
+    "cadence": "monthly",
+    "effectiveFrom": "2026-08-23T00:00:00.000Z"
+  },
+  "repairCredits": {
+    "accrualMinor": "1500",
+    "unlockMinor": "6000",
+    "capMinor": "35000"
+  }
+}
+```
+
+Minor units are integer cents. A website must not duplicate these terms, create a processor
+customer, or post an unauthenticated enrollment. Its **Join Device Care** journey must require
+Auth0 sign-in/sign-up, call `POST /v1/customer-portal/registration` for a new Core customer, then
+use the authenticated saved-card SetupIntent, payment-method, and Device Care enrollment routes
+documented in the API reference. Every write requires a fresh UUID idempotency key and an Auth0
+access token for the Core API audience. When no active plan/policy exists, Core returns `404
+DEVICE_CARE_OFFER_UNAVAILABLE`; the website must hide or disable enrollment rather than showing
+stale marketing terms. Add the exact deployed website origin to Render's `API_ALLOWED_ORIGINS`.
+
+CORE-019 is deliberately a public-read plus authenticated-handoff contract: the public website
+never receives a Stripe secret, webhook secret, stored-card reference, or authority to grant
+membership benefits. Signed provider webhooks remain the source for payment finalization, Repair
+Credit accrual, and receipts. The production payment test for CORE-018/CORE-032 remains required
+before representing a live enrollment as verified.
 
 For Square, populate the existing sandbox or production application, location, and access-token
 variables, including the matching `SQUARE_*_WEBHOOK_NOTIFICATION_URL` and

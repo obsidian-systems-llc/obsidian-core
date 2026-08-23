@@ -99,6 +99,7 @@ import {
   type DeviceCareRepository,
 } from './device-care.js';
 import type { DeviceCareWallet } from './device-care-wallet.js';
+import type { PublicDeviceCareOfferRepository } from './public-device-care-offer.js';
 import {
   CommunicationWorkflowError,
   communicationDoNotCallSchema,
@@ -142,6 +143,7 @@ export type BuildAppOptions = {
   paymentRepository?: PaymentRepository;
   deviceCareRepository?: DeviceCareRepository;
   deviceCareWalletRepository?: { forSubject(subject: string): Promise<DeviceCareWallet | null> };
+  publicDeviceCareOfferRepository?: PublicDeviceCareOfferRepository;
   squareWebhookRepository?: Pick<PaymentRepository, 'processSquareWebhook'>;
   squareWebhooks?: {
     production?: SquareWebhookConfiguration | undefined;
@@ -179,6 +181,7 @@ export function buildApp({
   paymentRepository,
   deviceCareRepository,
   deviceCareWalletRepository,
+  publicDeviceCareOfferRepository,
   squareWebhookRepository,
   squareWebhooks,
   stripeWebhookRepository,
@@ -240,6 +243,18 @@ export function buildApp({
       return reply.code(503).send({ status: 'unavailable' });
     return { status: 'ready' };
   });
+  if (publicDeviceCareOfferRepository)
+    app.get(
+      '/v1/public/device-care/offer',
+      async (_request, reply) =>
+        (await publicDeviceCareOfferRepository.getActiveOffer()) ??
+        reply.code(404).send({
+          error: {
+            code: 'DEVICE_CARE_OFFER_UNAVAILABLE',
+            message: 'Device Care is not currently available for enrollment.',
+          },
+        }),
+    );
   if (squareWebhookRepository && squareWebhooks) {
     const registerSquareWebhook = (
       environment: 'sandbox' | 'production',
