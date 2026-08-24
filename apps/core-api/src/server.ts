@@ -39,9 +39,32 @@ import { PostgresPublicDeviceCareOfferRepository } from './public-device-care-of
 import { PostgresRetellCallRepository } from './retell.js';
 import { loadResendEmailConfiguration, PostgresCustomerEmailOutbox } from './customer-email.js';
 import { PostgresAccountInvitationRepository } from './account-invitations.js';
+import {
+  createCompositeTokenVerifier,
+  createCoreIdentityTokenVerifier,
+  loadCoreIdentityConfiguration,
+  PostgresCoreIdentityEmailOutbox,
+  PostgresCoreIdentityRepository,
+} from './core-identity.js';
 
 const environment = loadEnvironment();
 const emailConfiguration = loadResendEmailConfiguration(process.env);
+const coreIdentityConfiguration = loadCoreIdentityConfiguration(process.env);
+const coreIdentityRepository = coreIdentityConfiguration
+  ? new PostgresCoreIdentityRepository(
+      environment.DATABASE_URL,
+      loadFieldEncryptor(environment),
+      coreIdentityConfiguration,
+    )
+  : undefined;
+const coreIdentityEmailOutbox =
+  coreIdentityConfiguration && emailConfiguration
+    ? new PostgresCoreIdentityEmailOutbox(
+        environment.DATABASE_URL,
+        coreIdentityConfiguration,
+        emailConfiguration,
+      )
+    : undefined;
 const customerEmailOutbox =
   environment.CUSTOMER_EMAIL_ENABLED && emailConfiguration
     ? new PostgresCustomerEmailOutbox(environment.DATABASE_URL, emailConfiguration)
@@ -188,6 +211,16 @@ const app = buildApp({
         invitationEmailClaim: environment.AUTH0_INVITATION_EMAIL_CLAIM,
       }
     : {}),
+  ...(coreIdentityRepository
+    ? {
+        coreIdentityRepository,
+        coreIdentitySessionCookie: {
+          name: environment.CORE_IDENTITY_SESSION_COOKIE_NAME,
+          secure: environment.NODE_ENV === 'production',
+          maxAgeSeconds: coreIdentityConfiguration!.refreshTokenTtlSeconds,
+        },
+      }
+    : {}),
   ...(squareWebhookRepository
     ? {
         squareWebhookRepository,
@@ -212,18 +245,35 @@ const app = buildApp({
     sensitiveRateLimitWindowMs: environment.API_SENSITIVE_RATE_LIMIT_WINDOW_MS,
     stepUpClaim: environment.AUTH0_STEP_UP_CLAIM,
     stepUpValue: environment.AUTH0_STEP_UP_VALUE,
+    coreIdentityStepUpMethod: 'mfa',
   },
-  verifyToken: createAuth0TokenVerifier(loadAuth0Config(environment)),
+  verifyToken: createCompositeTokenVerifier(
+    coreIdentityConfiguration
+      ? createCoreIdentityTokenVerifier(coreIdentityConfiguration)
+      : undefined,
+    environment.AUTH0_DOMAIN && environment.AUTH0_AUDIENCE
+      ? createAuth0TokenVerifier(
+          loadAuth0Config({
+            AUTH0_DOMAIN: environment.AUTH0_DOMAIN,
+            AUTH0_AUDIENCE: environment.AUTH0_AUDIENCE,
+          }),
+        )
+      : undefined,
+  ),
 });
 async function start(): Promise<void> {
   try {
     await app.listen({ host: environment.CORE_API_HOST, port: environment.CORE_API_PORT });
-    if (customerEmailOutbox || accountInvitationRepository) {
+    if (customerEmailOutbox || accountInvitationRepository || coreIdentityEmailOutbox) {
       const deliverTransactionalEmail = () => {
         if (customerEmailOutbox)
           void customerEmailOutbox.deliverPending().catch((error: unknown) => app.log.error(error));
         if (accountInvitationRepository)
           void accountInvitationRepository
+            .deliverPending()
+            .catch((error: unknown) => app.log.error(error));
+        if (coreIdentityEmailOutbox)
+          void coreIdentityEmailOutbox
             .deliverPending()
             .catch((error: unknown) => app.log.error(error));
       };

@@ -7,6 +7,7 @@ export type ApiSecurityConfig = {
   sensitiveRateLimitWindowMs: number;
   stepUpClaim: string | undefined;
   stepUpValue: string | undefined;
+  coreIdentityStepUpMethod?: string;
 };
 
 export class SensitiveRouteRateLimiter {
@@ -38,6 +39,13 @@ export function isOriginAllowed(origin: string | undefined, config: ApiSecurityC
 }
 
 export function hasStepUpAuthentication(payload: JWTPayload, config: ApiSecurityConfig): boolean {
+  const methods = payload.amr;
+  if (
+    config.coreIdentityStepUpMethod &&
+    Array.isArray(methods) &&
+    methods.includes(config.coreIdentityStepUpMethod)
+  )
+    return true;
   if (!config.stepUpClaim || !config.stepUpValue) return false;
   const value = payload[config.stepUpClaim];
   return Array.isArray(value) ? value.includes(config.stepUpValue) : value === config.stepUpValue;

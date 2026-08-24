@@ -376,7 +376,7 @@ priorities:
       - End-to-end authorization, tenancy/scope, audit, migration, and repair-visibility tests validate the complete operations tree
   - id: CORE-030
     title: Quote approval, customer acceptance, and revision workflows
-    status: proposed
+    status: done
     priority: 29
     dependencies: [CORE-010, CORE-028]
     acceptance_criteria:
@@ -575,3 +575,25 @@ priorities:
       supplier item to customers, and do not trust provider pricing as Obsidian's selling price.
       WGP and Injured Gadgets are prospective parts/supplier adapters pending written provider
       approval and official documentation; no scraping or unsupported automation is authorized.
+  - id: CORE-044
+    title: Core-owned identity, credential, and session system
+    status: in_progress
+    priority: 43
+    dependencies: [CORE-003, CORE-005, CORE-007, CORE-028, CORE-040, CORE-041]
+    acceptance_criteria:
+      - Core provides a secure, rate-limited email/password registration, email-verification, login, logout, password-reset, session-revocation, and account-recovery contract without storing plaintext or reversibly encrypted passwords.
+      - Password credentials use Argon2id with versioned parameters and unique salts; verification/reset/session secrets are random, short-lived where appropriate, stored only as hashes, replay-safe, and never logged or returned after issuance.
+      - Browser and mobile clients use Core-issued short-lived access tokens and rotating, server-tracked refresh/session credentials; authorization remains Core-owned and all sensitive account actions are audited.
+      - Customer signup collects Core-owned encrypted profile data in the same idempotent onboarding flow, while workforce access continues to require owner-controlled invitations and verified email possession.
+      - Step-up authentication for administrative and financial actions is implemented through a Core-owned MFA-ready mechanism; ordinary password authentication alone cannot satisfy step-up policy.
+      - Existing Auth0 identities remain valid during an explicit, reversible migration window. Core supports a user-controlled reauthentication/linking path but never transfers, imports, or exposes Auth0 passwords.
+      - README, migration/rollback runbook, environment documentation, API contract, abuse controls, security tests, and real-PostgreSQL integration coverage document the complete local-identity system before any portal stops using Auth0.
+    implementation_notes: >-
+      This priority supersedes Auth0 as the long-term identity provider after repeated callback,
+      token-claim, and customer-onboarding operational failures. The selected architecture is an
+      internal Core Identity module within the Node.js modular monolith, not a per-portal auth
+      library. It will issue Core-verifiable credentials and preserve Core's separate customer,
+      employee, entitlement, role, audit, and encryption boundaries. Keycloak deployment work is
+      not a dependency and must not be used for production authentication. CORE-030 was returned
+      to proposed status before deployment; its local, unfinished quote-lifecycle work remains
+      uncommitted and must be completed or cleanly reverted in its own iteration.

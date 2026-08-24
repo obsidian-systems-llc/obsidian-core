@@ -6,8 +6,29 @@ const environmentSchema = z.object({
   CORE_API_PORT: z.coerce.number().int().min(1).max(65_535).default(3000),
   PORT: z.coerce.number().int().min(1).max(65_535).optional(),
   DATABASE_URL: z.string().url().startsWith('postgresql://'),
-  AUTH0_DOMAIN: z.string().min(1),
-  AUTH0_AUDIENCE: z.string().url(),
+  // Auth0 stays optional during the reversible Core-owned identity migration.
+  AUTH0_DOMAIN: z.string().min(1).optional(),
+  AUTH0_AUDIENCE: z.string().url().optional(),
+  CORE_IDENTITY_ENABLED: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((value) => value === 'true'),
+  CORE_IDENTITY_ISSUER: z.string().url().optional(),
+  CORE_IDENTITY_AUDIENCE: z.string().url().optional(),
+  CORE_IDENTITY_SIGNING_SECRET: z.string().min(43).optional(),
+  CORE_IDENTITY_ACCESS_TOKEN_TTL_SECONDS: z.coerce.number().int().min(300).max(3600).default(900),
+  CORE_IDENTITY_REFRESH_TOKEN_TTL_SECONDS: z.coerce
+    .number()
+    .int()
+    .min(3600)
+    .max(7_776_000)
+    .default(2_592_000),
+  CORE_IDENTITY_EMAIL_VERIFICATION_URL: z.string().url().optional(),
+  CORE_IDENTITY_PASSWORD_RESET_URL: z.string().url().optional(),
+  CORE_IDENTITY_SESSION_COOKIE_NAME: z
+    .string()
+    .regex(/^[A-Za-z0-9_-]{1,80}$/)
+    .default('obsidian_core_session'),
   FIELD_ENCRYPTION_KEY: z.string().min(1),
   FIELD_ENCRYPTION_KEY_ID: z.string().min(1),
   API_ALLOWED_ORIGINS: z.string().optional(),
@@ -62,14 +83,27 @@ export function loadEnvironment(source: NodeJS.ProcessEnv = process.env): Enviro
   if (!result.success)
     throw new Error(`Invalid environment configuration: ${z.prettifyError(result.error)}`);
   const environment = result.data;
+  if (
+    environment.CORE_IDENTITY_ENABLED &&
+    (!environment.CORE_IDENTITY_ISSUER ||
+      !environment.CORE_IDENTITY_AUDIENCE ||
+      !environment.CORE_IDENTITY_SIGNING_SECRET ||
+      !environment.CORE_IDENTITY_EMAIL_VERIFICATION_URL ||
+      !environment.CORE_IDENTITY_PASSWORD_RESET_URL)
+  )
+    throw new Error(
+      'Core identity requires issuer, audience, signing secret, and email verification/reset URLs.',
+    );
   if (environment.RETELL_ENABLED && !environment.RETELL_API_KEY)
     throw new Error('RETELL_API_KEY is required when RETELL_ENABLED=true.');
   if (
-    (environment.CUSTOMER_EMAIL_ENABLED || environment.STAFF_INVITATIONS_ENABLED) &&
+    (environment.CUSTOMER_EMAIL_ENABLED ||
+      environment.STAFF_INVITATIONS_ENABLED ||
+      environment.CORE_IDENTITY_ENABLED) &&
     (!environment.RESEND_API_KEY || !environment.RESEND_FROM_EMAIL)
   )
     throw new Error(
-      'RESEND_API_KEY and RESEND_FROM_EMAIL are required when transactional email or staff invitations are enabled.',
+      'RESEND_API_KEY and RESEND_FROM_EMAIL are required when transactional email, staff invitations, or Core identity are enabled.',
     );
   if (environment.STAFF_INVITATIONS_ENABLED && !environment.INVITATION_ACCEPT_URL)
     throw new Error('INVITATION_ACCEPT_URL is required when STAFF_INVITATIONS_ENABLED=true.');
@@ -89,7 +123,11 @@ export function loadEnvironment(source: NodeJS.ProcessEnv = process.env): Enviro
   if (environment.NODE_ENV === 'production') {
     if (!origins.length || origins.some((origin) => !origin.startsWith('https://')))
       throw new Error('Production requires HTTPS API_ALLOWED_ORIGINS.');
-    if (!environment.AUTH0_STEP_UP_CLAIM || !environment.AUTH0_STEP_UP_VALUE)
+    if (
+      environment.AUTH0_DOMAIN &&
+      environment.AUTH0_AUDIENCE &&
+      (!environment.AUTH0_STEP_UP_CLAIM || !environment.AUTH0_STEP_UP_VALUE)
+    )
       throw new Error('Production requires AUTH0_STEP_UP_CLAIM and AUTH0_STEP_UP_VALUE.');
   }
   return {

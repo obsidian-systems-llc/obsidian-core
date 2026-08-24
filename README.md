@@ -8,22 +8,102 @@ Customer-facing, employee-facing, administrative, and executive applications mus
 
 The repository currently contains the foundation for a backend-only Node.js service. `apps/core-api` uses Fastify and strict TypeScript, and exposes health, readiness, identity, and initial authorization boundaries while database, identity, authorization, audit, and business domains are built in priority order. No graphical user interface is included in this repository. Future Vercel-hosted customer, employee, administrative, and executive applications must communicate with Core through authenticated APIs and must not become independent systems of record.
 
-### Identity provider
+### Core-owned identity migration
 
-Auth0 is the selected identity provider. Applications will use OIDC Authorization Code with PKCE; Core will verify tokens server-side and remain authoritative for profiles, entitlements, roles, permissions, and resource-level authorization.
+Core Identity is the long-term login, account-creation, and session system for Obsidian applications.
+It is implemented inside the Core backend rather than in a portal or a browser: customer profile data,
+roles, entitlements, permissions, audit history, and authorization remain Core-owned. Passwords use
+Argon2id with a unique salt and versioned parameters. Core stores only hashes of one-time verification,
+reset, and refresh secrets; it never stores plaintext passwords, card data, or reusable email-link
+secrets.
 
-Before enabling login, create separate Auth0 tenants for development, staging, and production; configure each API audience and allowed callback/logout URLs; then set `AUTH0_DOMAIN` and `AUTH0_AUDIENCE` through secret management. Never commit client secrets or management API credentials.
+`CORE_IDENTITY_ENABLED=true` activates the new customer flow. New customers create a Core account,
+verify their email, then sign in with Core-issued access tokens. Browser refresh credentials are
+rotated and stored in an HTTP-only cookie; portal JavaScript must keep only the short-lived access token
+in memory. Auth0 bearer-token verification remains enabled during the reversible migration window so
+existing users are not locked out. Auth0 passwords cannot and will not be imported. Workforce
+invitations remain owner-controlled: an authenticated Core user can now accept an invitation when the
+Core account email matches the invitation recipient. The workforce-specific password-registration and
+account-linking screens remain a controlled migration task before legacy Auth0 can be retired.
 
-`GET /v1/identity/me` is Core's initial protected API boundary. It requires an `Authorization: Bearer <token>` header, verifies the Auth0 RS256 signature through the tenant JWKS, and validates both issuer and API audience. Missing, malformed, invalid, or wrong-audience tokens receive `401` with the stable `UNAUTHENTICATED` error code. `/health` and `/ready` intentionally remain unauthenticated operational endpoints.
+`GET /v1/identity/me` accepts either a valid legacy Auth0 token or a Core access token. Missing,
+malformed, invalid, expired, or wrong-audience tokens receive `401 UNAUTHENTICATED`. `/health` and
+`/ready` intentionally remain unauthenticated operational endpoints.
+
+### Customer portal: Core Identity contract
+
+This is the contract for the customer portal migration. The portal must remove Auth0 redirects and
+callbacks only after Core Identity is enabled, migration validation passes, and the portal's deployed
+origin is included in `API_ALLOWED_ORIGINS`.
+
+Use `Content-Type: application/json`, a new UUID `X-Correlation-Id` for each write, and
+`credentials: 'include'` on browser requests. The browser must use `Authorization: Bearer
+<accessToken>` on protected Core routes. Do not store a refresh credential in localStorage,
+sessionStorage, cookies created by portal JavaScript, logs, analytics, URLs, or state-management
+snapshots. The Core response sets its own HTTP-only refresh cookie. Access tokens are valid for 900
+seconds by default; hold them only in memory and call the refresh route after a `401` or before expiry.
+
+Customer signup calls:
+
+```json
+POST /v1/identity/customer-registration
+{
+  "email": "customer@example.com",
+  "password": "a customer-chosen password of at least 12 characters",
+  "profile": { "firstName": "Jane", "lastName": "Doe", "phone": "8125550100" },
+  "idempotencyKey": "a UUID"
+}
+```
+
+The `profile` values are encrypted at rest in Core. A successful request returns `202` with
+`{ "profileId": "UUID", "verificationRequired": true }`. It does not log in the customer and never
+returns a verification token. Render/Resend delivers an email containing a link to
+`CORE_IDENTITY_EMAIL_VERIFICATION_URL?token=...`; that portal page reads the token only long enough to
+call `POST /v1/identity/email-verification/confirm` with `{ "token": "..." }`, then removes it from
+the browser URL/history with `history.replaceState`.
+
+Login calls `POST /v1/identity/login` with `{ "email", "password" }`. On success Core sets the
+HTTP-only session cookie and returns:
+
+```json
+{ "accessToken": "eyJ...", "expiresIn": 900, "tokenType": "Bearer" }
+```
+
+`403 EMAIL_VERIFICATION_REQUIRED` means the portal must show the verification-pending screen.
+`401 INVALID_CREDENTIALS` is deliberately generic. `POST /v1/identity/session/refresh` has an empty
+JSON object body for browsers, sends `credentials: 'include'`, rotates the cookie, and returns the same
+access-token response. `POST /v1/identity/logout` also uses `credentials: 'include'`; it is safe to
+call even after a session expires. Native clients are a later contract and must use platform-secure
+credential storage; they must not reuse browser-cookie assumptions.
+
+Password reset is two-step: send `{ "email" }` to `POST /v1/identity/password-reset/request` and
+always display the same success state; then the emailed URL targets
+`CORE_IDENTITY_PASSWORD_RESET_URL?token=...`, whose portal page calls
+`POST /v1/identity/password-reset/confirm` with `{ "token", "password" }`. Both email links expire
+after 30 minutes and are single-use. A completed password reset revokes all active Core sessions.
+
+Core-owned MFA is available for Core-issued access tokens. An authenticated user starts enrollment with
+`POST /v1/identity/mfa/enrollment`; Core returns an `otpauth://` URI and ten recovery codes exactly
+once. The client renders the URI as a QR code locally, displays recovery codes for an offline secure
+save, and must never upload either value to analytics or logs. Confirm the current authenticator code
+with `POST /v1/identity/mfa/enrollment/confirm` `{ "code": "123456" }`. For an administrative or
+financial action requiring step-up, call `POST /v1/identity/mfa/step-up` with an authenticator or unused
+recovery code; Core returns a replacement bearer token valid for five minutes with `amr` containing
+`mfa`. A password-only access token cannot satisfy Core step-up policy.
+
+After Core login, use the existing customer-portal API unchanged: profile, overview, Device Care
+wallet, repair requests, saved payment methods, enrollment, cancellation, and repairs are still
+authorized by Core's membership, entitlement, and permission checks. A Core subject has the form
+`core|<Core user UUID>`; clients must treat it as opaque and never use it to authorize UI behavior.
 
 ### API perimeter configuration
 
 Core applies no-sniff, frame-deny, referrer, and cross-origin resource-policy headers to every
 response. Configure browser access with `API_ALLOWED_ORIGINS` as a comma-separated allowlist and
 configure sensitive write protection with `API_SENSITIVE_RATE_LIMIT_MAX` and
-`API_SENSITIVE_RATE_LIMIT_WINDOW_MS`. Production requires HTTPS origins and an Auth0 custom
-step-up claim/value (`AUTH0_STEP_UP_CLAIM`, `AUTH0_STEP_UP_VALUE`); subscription-plan changes reject
-tokens without that claim. The built-in limiter is per-process and suitable for a single Core
+`API_SENSITIVE_RATE_LIMIT_WINDOW_MS`. Production requires HTTPS origins. When legacy Auth0 is enabled,
+it also requires an Auth0 custom step-up claim/value (`AUTH0_STEP_UP_CLAIM`, `AUTH0_STEP_UP_VALUE`);
+Core Identity instead requires a five-minute MFA step-up token. The built-in limiter is per-process and suitable for a single Core
 instance only; distributed production deployments require a shared limiter before horizontal scaling.
 
 ### Employee mobile contract
@@ -42,7 +122,7 @@ dedicated Auth0 Native application; no client secrets belong in the application.
 ## API reference
 
 Production base URL: `https://api.obsidian-systems.tech`. Local development uses the configured
-`CORE_API_HOST` and `CORE_API_PORT`. All `/v1/*` routes require an Auth0 access token in
+`CORE_API_HOST` and `CORE_API_PORT`. All `/v1/*` routes require a Core or legacy Auth0 access token in
 `Authorization: Bearer <token>` unless marked public. Core
 returns `401 UNAUTHENTICATED` for invalid tokens, `403 FORBIDDEN` for missing entitlement or
 permission, and `400` with a stable route-specific `INVALID_*` code for invalid input. Send an
@@ -53,7 +133,17 @@ permission, and `400` with a stable route-specific `INVALID_*` code for invalid 
 | GET | `/health` | Public | API liveness. |
 | GET | `/ready` | Public | Database readiness. |
 | GET | `/v1/public/device-care/offer` | Public, read-only | Returns active versioned Device Care enrollment price/cadence plus Repair Credit accrual, unlock, and cap terms. |
-| GET | `/v1/identity/me` | Authenticated | Returns the Auth0 subject recognized by Core. |
+| POST | `/v1/identity/customer-registration` | Public, rate-limited | Creates an encrypted customer profile plus an unverified Core Identity account; queues email verification and never returns a verification secret. |
+| POST | `/v1/identity/login` | Public, rate-limited | Verifies Core email/password credentials, sets a rotating HTTP-only session cookie, and returns a 15-minute bearer access token. |
+| POST | `/v1/identity/session/refresh` | Session cookie or native refresh credential, rate-limited | Rotates the server-tracked session credential and returns a fresh bearer access token. |
+| POST | `/v1/identity/logout` | Session cookie or native refresh credential, rate-limited | Revokes the current Core session and clears the browser cookie. |
+| POST | `/v1/identity/email-verification/confirm` | Public, rate-limited | Consumes a one-time email verification token. |
+| POST | `/v1/identity/password-reset/request` | Public, rate-limited | Queues a reset email without disclosing whether the address exists. |
+| POST | `/v1/identity/password-reset/confirm` | Public, rate-limited | Consumes one reset token, replaces the Argon2id credential, and revokes active sessions. |
+| POST | `/v1/identity/mfa/enrollment` | Authenticated Core identity | Creates/replaces a pending TOTP factor and returns its one-time provisioning URI plus recovery codes. |
+| POST | `/v1/identity/mfa/enrollment/confirm` | Authenticated Core identity | Verifies the current TOTP code and activates the pending factor. |
+| POST | `/v1/identity/mfa/step-up` | Authenticated Core identity, rate-limited | Verifies an active TOTP factor or one unused recovery code and returns a five-minute MFA bearer token. |
+| GET | `/v1/identity/me` | Authenticated | Returns the Core or legacy Auth0 subject recognized by Core. |
 | GET | `/v1/core-admin/authorization/access` | `core-admin` + `authorization.read` | Verifies Core Admin access. |
 | GET | `/v1/core-admin/authorization/roles` | `core-admin` + `authorization.manage`, step-up | Lists active application roles and permissions. |
 | POST | `/v1/core-admin/authorization/roles` | `core-admin` + `authorization.manage`, step-up | Creates or reactivates an application-scoped role. |
@@ -65,7 +155,7 @@ permission, and `400` with a stable route-specific `INVALID_*` code for invalid 
 | GET | `/v1/core-admin/account-invitations` | `core-admin` + `authorization.invite`, step-up | Lists the most recent workforce invitations without exposing their tokens. |
 | POST | `/v1/core-admin/account-invitations` | `core-admin` + `authorization.invite`, step-up | Queues a role-specific invitation email for an address that does not already hold the same access. |
 | POST | `/v1/core-admin/account-invitations/:id/revoke` | `core-admin` + `authorization.invite`, step-up | Revokes an unclaimed workforce invitation. |
-| POST | `/v1/account-invitations/accept` | Authenticated Auth0 user; no existing Core entitlement required | Accepts an invitation only when the token's configured email claim matches its recipient. |
+| POST | `/v1/account-invitations/accept` | Authenticated Core or legacy Auth0 user; no existing Core entitlement required | Accepts an invitation only when the authenticated account email matches its recipient. |
 | GET | `/v1/core-admin/organization-hierarchy` | `core-admin` + `organization.read` | Returns active organization hierarchy. |
 | POST | `/v1/core-admin/employees` | `core-admin` + `employee.manage`, step-up | Creates an encrypted employee profile for an existing active Core user. |
 | GET | `/v1/core-admin/employees/:id` | `core-admin` + `employee.manage`, step-up | Reads an employee profile for authorized administration. |
@@ -220,6 +310,13 @@ error; inaccessible calls return `COMMUNICATION_CALL_NOT_FOUND` without leaking 
 | GET | `/v1/employee-mobile/jobs` | `employee-mobile` + `job.self.read` | Lists only jobs assigned to the caller's active employee profile. |
 | POST | `/v1/employee-mobile/jobs/:id/transitions` | `employee-mobile` + `job.self.transition` | Appends an allowed transition for an assigned job only. |
 | POST | `/v1/core-admin/quotes` | `core-admin` + `quote.create` | Creates an idempotent catalog-priced quote. |
+| POST | `/v1/core-admin/quotes/:id/issue` | `core-admin` + `quote.issue` | Issues an immutable quote snapshot. |
+| POST | `/v1/core-admin/quotes/:id/approve` | `core-admin` + `quote.approve`, step-up | Approves an issued quote. |
+| POST | `/v1/core-admin/quotes/:id/cancel` | `core-admin` + `quote.cancel` | Cancels an eligible quote with a reason. |
+| POST | `/v1/core-admin/quotes/:id/expire` | `core-admin` + `quote.issue` | Marks an eligible quote expired. |
+| POST | `/v1/core-admin/quotes/:id/revisions` | `core-admin` + `quote.revise` | Creates a new immutable revision and supersedes the source quote. |
+| POST | `/v1/core-admin/quotes/:id/overrides` | `core-admin` + `quote.override`, step-up | Creates a reasoned immutable revision with controlled line-price overrides. |
+| POST | `/v1/customer-portal/quotes/:id/accept` | `customer-portal` + `quote.self.accept` | Records customer attestation and acceptance evidence for an owned quote. |
 | POST | `/v1/core-admin/jobs` | `core-admin` + `job.create` | Creates an idempotent job and appointment. |
 | POST | `/v1/core-admin/jobs/:id/transitions` | `core-admin` + `job.transition` | Appends an allowed workflow transition. |
 | POST | `/v1/executive/subscription-plan-versions` | `executive-panel` + `subscription.plan.manage` | Creates an audited plan version; production requires step-up authentication. |
@@ -359,6 +456,16 @@ button; `403 FORBIDDEN` is authoritative.
   active catalog versions, snapshots them, and returns
   `{ id, currency, totalAmountMinor, items }`; every returned line includes the catalog version,
   name, quantity, unit and line minor-unit amounts. It does not accept client-supplied prices.
+- Quote lifecycle commands accept `{ idempotencyKey, reason? }`. Issue transitions only `draft`
+  quotes; approval requires configured step-up authentication and transitions only `issued` quotes;
+  customer acceptance requires `{ idempotencyKey, termsVersion, attested: true }` and is restricted
+  to the owning customer. Cancellation requires a reason. A revision accepts
+  `{ idempotencyKey, reason, overrides?: [{ quoteLineItemId, unitAmountMinor }] }`: the normal
+  revision route rejects overrides, while the override route requires `quote.override` and step-up.
+  Core copies the source line snapshots into a new revision, supersedes the source quote, and writes
+  immutable lifecycle and audit evidence. Clients cannot alter historical lines, totals, acceptance,
+  or price history. Invalid lifecycle requests return `409 INVALID_QUOTE_LIFECYCLE`, expired quotes
+  return `409 QUOTE_EXPIRED`, and inaccessible quotes return `404 QUOTE_NOT_FOUND`.
 - `POST /v1/core-admin/jobs` accepts
   `{ customerProfileId?, quoteId?, employeeProfileId?, windowStart, windowEnd, idempotencyKey }`
   and returns `{ id, status, windowStart, windowEnd }`. It creates the appointment and an audited,
@@ -444,11 +551,17 @@ button; `403 FORBIDDEN` is authoritative.
 | Variable | Required | Current purpose |
 | --- | --- | --- |
 | `DATABASE_URL` | Yes | PostgreSQL connection URL. |
-| `AUTH0_DOMAIN`, `AUTH0_AUDIENCE` | Yes | Auth0 issuer/JWKS discovery and expected API audience. |
+| `AUTH0_DOMAIN`, `AUTH0_AUDIENCE` | Migration window only | Legacy Auth0 issuer/JWKS discovery and expected API audience. Keep them configured until the explicitly documented user migration is complete. |
+| `CORE_IDENTITY_ENABLED` | No, default `false` | Enables Core-owned customer registration, email verification, password login/reset, and session routes. It also requires Resend configuration. |
+| `CORE_IDENTITY_ISSUER`, `CORE_IDENTITY_AUDIENCE` | Required when Core Identity is enabled | Exact HTTPS issuer and audience placed in and validated on Core-issued access tokens. Use the Core API URL for both unless a documented future identity domain is introduced. |
+| `CORE_IDENTITY_SIGNING_SECRET` | Required when Core Identity is enabled | At least 32 cryptographically random bytes encoded as a secret value. It signs Core access tokens; store only in Render secret storage and rotate through a planned key migration. |
+| `CORE_IDENTITY_ACCESS_TOKEN_TTL_SECONDS`, `CORE_IDENTITY_REFRESH_TOKEN_TTL_SECONDS` | No | Access-token lifetime (default 900 seconds) and server-tracked rotating session lifetime (default 30 days). |
+| `CORE_IDENTITY_SESSION_COOKIE_NAME` | No | HTTP-only browser session-cookie name. Do not give this cookie a portal-controlled domain. |
+| `CORE_IDENTITY_EMAIL_VERIFICATION_URL`, `CORE_IDENTITY_PASSWORD_RESET_URL` | Required when Core Identity is enabled | HTTPS customer-portal pages that receive a short-lived one-time `token` query parameter, consume it immediately, and scrub it from browser history. |
 | `FIELD_ENCRYPTION_KEY`, `FIELD_ENCRYPTION_KEY_ID` | Yes | Authenticated field encryption for customer and employee profile payloads. Rotate through a controlled migration, never by changing historical ciphertext in place. |
 | `API_ALLOWED_ORIGINS` | Production | Comma-separated HTTPS browser-origin allowlist. |
 | `API_SENSITIVE_RATE_LIMIT_MAX`, `API_SENSITIVE_RATE_LIMIT_WINDOW_MS` | No | Per-process sensitive-route limiter configuration. A distributed deployment requires a shared limiter before horizontal scaling. |
-| `AUTH0_STEP_UP_CLAIM`, `AUTH0_STEP_UP_VALUE` | Production | Required production step-up authentication configuration. |
+| `AUTH0_STEP_UP_CLAIM`, `AUTH0_STEP_UP_VALUE` | Required only while legacy Auth0 verification is enabled in production | Auth0 step-up claim/value. Core-owned MFA is used by Core-issued tokens. |
 | `CORE_API_HOST`, `CORE_API_PORT`, `NODE_ENV` | No | Runtime host, port, and environment controls. |
 | `PORT` | Managed-platform runtime | When injected by a platform such as Render, Core binds to this port on `0.0.0.0`; local development continues to use `CORE_API_HOST` and `CORE_API_PORT`. |
 | `BOOTSTRAP_SUPER_ADMIN*` | Controlled bootstrap only | One-time local/controlled super-admin provisioning; never set in normal application runtime. |

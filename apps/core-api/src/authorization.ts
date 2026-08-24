@@ -36,8 +36,7 @@ export class PostgresAuthorizer implements Authorizer {
            SELECT u.id
            FROM identities i
            JOIN users u ON u.id = i.user_id
-           WHERE i.provider = 'auth0'
-             AND i.provider_subject = $1
+           WHERE i.provider_subject = $1
              AND u.status = 'active'
              AND u.archived_at IS NULL
          )

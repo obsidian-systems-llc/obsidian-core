@@ -649,7 +649,7 @@ export class PostgresPaymentRepository implements PaymentRepository {
     try {
       await client.query('BEGIN');
       const actor = await client.query<{ id: string }>(
-        "SELECT u.id FROM identities i JOIN users u ON u.id=i.user_id WHERE i.provider='auth0' AND i.provider_subject=$1 AND u.archived_at IS NULL",
+        'SELECT u.id FROM identities i JOIN users u ON u.id=i.user_id WHERE i.provider_subject=$1 AND u.archived_at IS NULL',
         [subject],
       );
       if (!actor.rows[0]) {

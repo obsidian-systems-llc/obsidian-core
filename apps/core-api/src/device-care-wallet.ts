@@ -24,7 +24,7 @@ export class PostgresDeviceCareWalletRepository {
         `WITH customer AS (
            SELECT cp.id FROM identities i JOIN customer_profile_memberships cpm ON cpm.user_id=i.user_id
            JOIN customer_profiles cp ON cp.id=cpm.customer_profile_id
-           WHERE i.provider='auth0' AND i.provider_subject=$1 AND cp.status='active' AND cp.archived_at IS NULL LIMIT 1
+           WHERE i.provider_subject=$1 AND cp.status='active' AND cp.archived_at IS NULL LIMIT 1
          ), policy AS (
            SELECT unlock_minor,cap_minor FROM device_care_membership_policies WHERE effective_from<=now()
            AND (effective_to IS NULL OR effective_to>now()) ORDER BY version_number DESC LIMIT 1
@@ -46,7 +46,7 @@ export class PostgresDeviceCareWalletRepository {
         (
           await client.query<{ exists: boolean }>(
             `SELECT EXISTS(SELECT 1 FROM customer_subscriptions cs JOIN customer_profile_memberships cpm ON cpm.customer_profile_id=cs.customer_profile_id
-         JOIN identities i ON i.user_id=cpm.user_id WHERE i.provider='auth0' AND i.provider_subject=$1
+         JOIN identities i ON i.user_id=cpm.user_id WHERE i.provider_subject=$1
          AND cs.status='active') AS exists`,
             [subject],
           )

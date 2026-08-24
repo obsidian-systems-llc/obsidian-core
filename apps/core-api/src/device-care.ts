@@ -1034,7 +1034,7 @@ export class PostgresDeviceCareRepository implements DeviceCareRepository {
   }
   private async customer(client: Client, subject: string) {
     const result = await client.query<{ profile_id: string; user_id: string; email: string }>(
-      `SELECT cpm.customer_profile_id AS profile_id,i.user_id,u.email FROM identities i JOIN users u ON u.id=i.user_id JOIN customer_profile_memberships cpm ON cpm.user_id=i.user_id JOIN customer_profiles cp ON cp.id=cpm.customer_profile_id WHERE i.provider='auth0' AND i.provider_subject=$1 AND u.status='active' AND cp.status='active' AND cp.archived_at IS NULL ORDER BY cpm.created_at LIMIT 1`,
+      `SELECT cpm.customer_profile_id AS profile_id,i.user_id,u.email FROM identities i JOIN users u ON u.id=i.user_id JOIN customer_profile_memberships cpm ON cpm.user_id=i.user_id JOIN customer_profiles cp ON cp.id=cpm.customer_profile_id WHERE i.provider_subject=$1 AND u.status='active' AND cp.status='active' AND cp.archived_at IS NULL ORDER BY cpm.created_at LIMIT 1`,
       [subject],
     );
     const row = result.rows[0];

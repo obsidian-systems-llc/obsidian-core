@@ -23,7 +23,9 @@ export type TransactionalEmailProvider = {
 
 export function loadResendEmailConfiguration(source: NodeJS.ProcessEnv = process.env) {
   const enabled =
-    source.CUSTOMER_EMAIL_ENABLED === 'true' || source.STAFF_INVITATIONS_ENABLED === 'true';
+    source.CUSTOMER_EMAIL_ENABLED === 'true' ||
+    source.STAFF_INVITATIONS_ENABLED === 'true' ||
+    source.CORE_IDENTITY_ENABLED === 'true';
   if (!enabled) return null;
   const apiKey = source.RESEND_API_KEY?.trim();
   const from = source.RESEND_FROM_EMAIL?.trim();

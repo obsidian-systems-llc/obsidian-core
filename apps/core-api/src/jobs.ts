@@ -124,7 +124,7 @@ export class PostgresJobRepository implements JobRepository {
         `SELECT cpm.customer_profile_id AS profile_id,i.user_id FROM identities i
          JOIN customer_profile_memberships cpm ON cpm.user_id=i.user_id
          JOIN customer_profiles cp ON cp.id=cpm.customer_profile_id
-         WHERE i.provider='auth0' AND i.provider_subject=$1 AND cp.status='active' AND cp.archived_at IS NULL
+         WHERE i.provider_subject=$1 AND cp.status='active' AND cp.archived_at IS NULL
          ORDER BY cpm.created_at LIMIT 1`,
         [subject],
       );
@@ -467,7 +467,7 @@ export class PostgresJobRepository implements JobRepository {
   }
   private async userId(client: Client, subject: string) {
     const r = await client.query<{ id: string }>(
-      "SELECT i.user_id id FROM identities i JOIN users u ON u.id=i.user_id WHERE i.provider='auth0' AND i.provider_subject=$1 AND u.status='active' AND u.archived_at IS NULL",
+      "SELECT i.user_id id FROM identities i JOIN users u ON u.id=i.user_id WHERE i.provider_subject=$1 AND u.status='active' AND u.archived_at IS NULL",
       [subject],
     );
     return r.rows[0]?.id ?? null;
@@ -475,7 +475,7 @@ export class PostgresJobRepository implements JobRepository {
   private async employeeProfileId(client: Client, subject: string) {
     const r = await client.query<{ id: string }>(
       `SELECT ep.id FROM identities i JOIN employee_profiles ep ON ep.user_id = i.user_id
-       WHERE i.provider = 'auth0' AND i.provider_subject = $1
+       WHERE i.provider_subject = $1
          AND ep.employment_status = 'active' AND ep.archived_at IS NULL`,
       [subject],
     );

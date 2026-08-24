@@ -253,12 +253,16 @@ export class PostgresAccountInvitationRepository implements AccountInvitationRep
     input: z.infer<typeof acceptAccountInvitationSchema>,
     correlationId: string,
   ) {
-    const emailResult = email.safeParse(authenticatedEmail);
-    if (!emailResult.success) return 'email_mismatch' as const;
     const client = new Client({ connectionString: this.databaseUrl });
     try {
       await client.connect();
       await client.query('BEGIN');
+      const localIdentity = await client.query<{ email: string }>(
+        'SELECT u.email FROM identities i JOIN users u ON u.id=i.user_id WHERE i.provider_subject=$1',
+        [subject],
+      );
+      const emailResult = email.safeParse(authenticatedEmail ?? localIdentity.rows[0]?.email);
+      if (!emailResult.success) return await rollback(client, 'email_mismatch' as const);
       const invitation = await client.query<InvitationRow>(
         `SELECT ${invitationSelect} ${invitationFrom}
          WHERE i.token_hash=$1 FOR UPDATE OF i`,
@@ -272,7 +276,7 @@ export class PostgresAccountInvitationRepository implements AccountInvitationRep
       const mapped = mapInvitation(current);
       if (mapped.status === 'accepted' && current.accepted_by_user_id) {
         const identity = await client.query<{ user_id: string }>(
-          "SELECT user_id FROM identities WHERE provider='auth0' AND provider_subject=$1",
+          'SELECT user_id FROM identities WHERE provider_subject=$1',
           [subject],
         );
         if (identity.rows[0]?.user_id === current.accepted_by_user_id)
@@ -295,7 +299,7 @@ export class PostgresAccountInvitationRepository implements AccountInvitationRep
         return await rollback(client, 'unavailable' as const);
       }
       const currentIdentity = await client.query<{ user_id: string }>(
-        "SELECT user_id FROM identities WHERE provider='auth0' AND provider_subject=$1 FOR UPDATE",
+        'SELECT user_id FROM identities WHERE provider_subject=$1 FOR UPDATE',
         [subject],
       );
       const user = await client.query<{ id: string; status: string; archived_at: Date | null }>(
@@ -311,8 +315,8 @@ export class PostgresAccountInvitationRepository implements AccountInvitationRep
         return await rollback(client, 'unavailable' as const);
       if (!currentIdentity.rows[0])
         await client.query(
-          "INSERT INTO identities (user_id,provider,provider_subject) VALUES ($1,'auth0',$2)",
-          [userRow.id, subject],
+          'INSERT INTO identities (user_id,provider,provider_subject) VALUES ($1,$2,$3)',
+          [userRow.id, subject.startsWith('core|') ? 'core' : 'auth0', subject],
         );
       await client.query(
         `INSERT INTO application_entitlements (user_id,application_id)

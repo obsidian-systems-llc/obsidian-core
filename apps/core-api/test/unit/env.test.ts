@@ -32,6 +32,28 @@ describe('environment validation', () => {
     ).toMatchObject({ CORE_API_HOST: '0.0.0.0', CORE_API_PORT: 10000 });
   });
 
+  it('requires complete Core Identity and transactional-email configuration when enabled', () => {
+    const base = {
+      DATABASE_URL: 'postgresql://user:password@localhost:5432/obsidian_core',
+      FIELD_ENCRYPTION_KEY: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=',
+      FIELD_ENCRYPTION_KEY_ID: 'test-key',
+      CORE_IDENTITY_ENABLED: 'true',
+    };
+    expect(() => loadEnvironment(base)).toThrow('Core identity requires');
+    expect(
+      loadEnvironment({
+        ...base,
+        CORE_IDENTITY_ISSUER: 'https://api.example.test',
+        CORE_IDENTITY_AUDIENCE: 'https://api.example.test',
+        CORE_IDENTITY_SIGNING_SECRET: 'a'.repeat(43),
+        CORE_IDENTITY_EMAIL_VERIFICATION_URL: 'https://portal.example.test/verify-email',
+        CORE_IDENTITY_PASSWORD_RESET_URL: 'https://portal.example.test/reset-password',
+        RESEND_API_KEY: 're_test',
+        RESEND_FROM_EMAIL: 'Obsidian Systems <accounts@example.test>',
+      }),
+    ).toMatchObject({ CORE_IDENTITY_ENABLED: true });
+  });
+
   it('rejects production without HTTPS origins and an Auth0 step-up claim', () => {
     expect(() =>
       loadEnvironment({

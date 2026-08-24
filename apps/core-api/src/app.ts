@@ -56,7 +56,15 @@ import {
   type MobileTimekeepingRepository,
   type TimekeepingRepository,
 } from './timekeeping.js';
-import { createQuoteSchema, QuoteInputError, type QuoteRepository } from './quotes.js';
+import {
+  createQuoteSchema,
+  quoteAcceptanceSchema,
+  quoteLifecycleSchema,
+  quoteRevisionSchema,
+  QuoteInputError,
+  QuoteLifecycleError,
+  type QuoteRepository,
+} from './quotes.js';
 import {
   createJobSchema,
   customerRepairRequestSchema,
@@ -116,6 +124,15 @@ import {
   revokeAccountInvitationSchema,
   type AccountInvitationRepository,
 } from './account-invitations.js';
+import {
+  coreCustomerRegistrationSchema,
+  coreLoginSchema,
+  coreMfaVerificationSchema,
+  corePasswordResetConfirmSchema,
+  corePasswordResetRequestSchema,
+  coreTokenSchema,
+  type CoreIdentityRepository,
+} from './core-identity.js';
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -158,6 +175,8 @@ export type BuildAppOptions = {
   retell?: { apiKey: string; repository: RetellCallRepository };
   accountInvitationRepository?: AccountInvitationRepository;
   invitationEmailClaim?: string;
+  coreIdentityRepository?: CoreIdentityRepository;
+  coreIdentitySessionCookie?: { maxAgeSeconds: number; name: string; secure: boolean };
   apiSecurity?: ApiSecurityConfig;
   verifyToken?: TokenVerifier;
 };
@@ -190,6 +209,8 @@ export function buildApp({
   retell,
   accountInvitationRepository,
   invitationEmailClaim,
+  coreIdentityRepository,
+  coreIdentitySessionCookie,
   apiSecurity,
   verifyToken,
 }: BuildAppOptions = {}): FastifyInstance {
@@ -228,6 +249,7 @@ export function buildApp({
       reply.header('vary', 'Origin');
       reply.header('access-control-allow-headers', 'authorization, content-type, x-correlation-id');
       reply.header('access-control-allow-methods', 'GET, HEAD, POST, PUT, DELETE, OPTIONS');
+      if (coreIdentitySessionCookie) reply.header('access-control-allow-credentials', 'true');
     }
     if (request.method === 'OPTIONS') return reply.code(204).send();
     if (rateLimiter && isSensitiveRoute(request)) {
@@ -244,6 +266,159 @@ export function buildApp({
       return reply.code(503).send({ status: 'unavailable' });
     return { status: 'ready' };
   });
+  if (coreIdentityRepository) {
+    const readCookie = (request: FastifyRequest) => {
+      const name = coreIdentitySessionCookie?.name;
+      if (!name) return undefined;
+      const cookie = request.headers.cookie;
+      return typeof cookie === 'string'
+        ? cookie
+            .split(';')
+            .map((value) => value.trim())
+            .find((value) => value.startsWith(`${name}=`))
+            ?.slice(name.length + 1)
+        : undefined;
+    };
+    const setSessionCookie = (reply: FastifyReply, refreshToken: string) => {
+      if (!coreIdentitySessionCookie) return;
+      reply.header(
+        'set-cookie',
+        `${coreIdentitySessionCookie.name}=${refreshToken}; Path=/v1/identity; HttpOnly; SameSite=${coreIdentitySessionCookie.secure ? 'None' : 'Lax'}; ${coreIdentitySessionCookie.secure ? 'Secure; ' : ''}Max-Age=${coreIdentitySessionCookie.maxAgeSeconds}`,
+      );
+    };
+    const clearSessionCookie = (reply: FastifyReply) => {
+      if (!coreIdentitySessionCookie) return;
+      reply.header(
+        'set-cookie',
+        `${coreIdentitySessionCookie.name}=; Path=/v1/identity; HttpOnly; SameSite=${coreIdentitySessionCookie.secure ? 'None' : 'Lax'}; ${coreIdentitySessionCookie.secure ? 'Secure; ' : ''}Max-Age=0`,
+      );
+    };
+    app.post('/v1/identity/customer-registration', async (request, reply) => {
+      const parsed = coreCustomerRegistrationSchema.safeParse(request.body);
+      if (!parsed.success)
+        return reply.code(400).send({
+          error: {
+            code: 'INVALID_IDENTITY_REGISTRATION',
+            message: 'Registration input is invalid.',
+          },
+        });
+      const result = await coreIdentityRepository.registerCustomer(
+        parsed.data,
+        String(request.headers['x-correlation-id'] ?? randomUUID()),
+      );
+      if (result === 'email_exists')
+        return reply.code(409).send({
+          error: {
+            code: 'IDENTITY_EMAIL_UNAVAILABLE',
+            message: 'An account cannot be created with this email.',
+          },
+        });
+      return reply.code(202).send(result);
+    });
+    app.post('/v1/identity/login', async (request, reply) => {
+      const parsed = coreLoginSchema.safeParse(request.body);
+      if (!parsed.success)
+        return reply
+          .code(400)
+          .send({ error: { code: 'INVALID_LOGIN', message: 'Login input is invalid.' } });
+      const result = await coreIdentityRepository.login(
+        parsed.data,
+        String(request.headers['x-correlation-id'] ?? randomUUID()),
+      );
+      if (result === 'invalid_credentials')
+        return reply.code(401).send({
+          error: { code: 'INVALID_CREDENTIALS', message: 'Email or password is incorrect.' },
+        });
+      if (result === 'email_verification_required')
+        return reply.code(403).send({
+          error: {
+            code: 'EMAIL_VERIFICATION_REQUIRED',
+            message: 'Verify your email before signing in.',
+          },
+        });
+      setSessionCookie(reply, result.refreshToken);
+      return { accessToken: result.accessToken, expiresIn: result.expiresIn, tokenType: 'Bearer' };
+    });
+    app.post('/v1/identity/session/refresh', async (request, reply) => {
+      const parsed = coreTokenSchema.safeParse(request.body);
+      const refreshToken = readCookie(request) ?? (parsed.success ? parsed.data.token : undefined);
+      if (!refreshToken)
+        return reply
+          .code(401)
+          .send({ error: { code: 'UNAUTHENTICATED', message: 'Session is no longer valid.' } });
+      const result = await coreIdentityRepository.refresh(
+        refreshToken,
+        String(request.headers['x-correlation-id'] ?? randomUUID()),
+      );
+      if (result === 'invalid_session')
+        return reply
+          .code(401)
+          .send({ error: { code: 'UNAUTHENTICATED', message: 'Session is no longer valid.' } });
+      setSessionCookie(reply, result.refreshToken);
+      return { accessToken: result.accessToken, expiresIn: result.expiresIn, tokenType: 'Bearer' };
+    });
+    app.post('/v1/identity/logout', async (request, reply) => {
+      const parsed = coreTokenSchema.safeParse(request.body);
+      const refreshToken = readCookie(request) ?? (parsed.success ? parsed.data.token : undefined);
+      if (refreshToken)
+        await coreIdentityRepository.logout(
+          refreshToken,
+          String(request.headers['x-correlation-id'] ?? randomUUID()),
+        );
+      clearSessionCookie(reply);
+      return reply.code(204).send();
+    });
+    app.post('/v1/identity/email-verification/confirm', async (request, reply) => {
+      const parsed = coreTokenSchema.safeParse(request.body);
+      if (!parsed.success)
+        return reply.code(400).send({
+          error: {
+            code: 'INVALID_EMAIL_VERIFICATION',
+            message: 'Verification input is invalid.',
+          },
+        });
+      const result = await coreIdentityRepository.confirmEmail(
+        parsed.data.token,
+        String(request.headers['x-correlation-id'] ?? randomUUID()),
+      );
+      if (result === 'invalid_token')
+        return reply.code(400).send({
+          error: {
+            code: 'INVALID_EMAIL_VERIFICATION',
+            message: 'Verification link is invalid or expired.',
+          },
+        });
+      return { status: 'verified' };
+    });
+    app.post('/v1/identity/password-reset/request', async (request, reply) => {
+      const parsed = corePasswordResetRequestSchema.safeParse(request.body);
+      if (!parsed.success)
+        return reply.code(400).send({
+          error: { code: 'INVALID_PASSWORD_RESET_REQUEST', message: 'Reset input is invalid.' },
+        });
+      await coreIdentityRepository.requestPasswordReset(
+        parsed.data.email,
+        String(request.headers['x-correlation-id'] ?? randomUUID()),
+      );
+      return reply.code(202).send({ status: 'accepted' });
+    });
+    app.post('/v1/identity/password-reset/confirm', async (request, reply) => {
+      const parsed = corePasswordResetConfirmSchema.safeParse(request.body);
+      if (!parsed.success)
+        return reply
+          .code(400)
+          .send({ error: { code: 'INVALID_PASSWORD_RESET', message: 'Reset input is invalid.' } });
+      const result = await coreIdentityRepository.confirmPasswordReset(
+        parsed.data,
+        String(request.headers['x-correlation-id'] ?? randomUUID()),
+      );
+      if (result === 'invalid_token')
+        return reply.code(400).send({
+          error: { code: 'INVALID_PASSWORD_RESET', message: 'Reset link is invalid or expired.' },
+        });
+      return { status: 'password_reset' };
+    });
+  }
   if (publicDeviceCareOfferRepository)
     app.get(
       '/v1/public/device-care/offer',
@@ -358,6 +533,76 @@ export function buildApp({
     app.get('/v1/identity/me', { preHandler: authenticate }, async (request) => ({
       subject: request.auth?.sub,
     }));
+    if (coreIdentityRepository) {
+      app.post(
+        '/v1/identity/mfa/enrollment',
+        { preHandler: authenticate },
+        async (request, reply) => {
+          const result = await coreIdentityRepository.beginMfaEnrollment(
+            request.auth!.sub!,
+            String(request.headers['x-correlation-id'] ?? randomUUID()),
+          );
+          if (result === 'identity_not_found')
+            return reply.code(404).send({
+              error: { code: 'CORE_IDENTITY_NOT_FOUND', message: 'Core identity was not found.' },
+            });
+          return reply.code(201).send(result);
+        },
+      );
+      app.post(
+        '/v1/identity/mfa/enrollment/confirm',
+        { preHandler: authenticate },
+        async (request, reply) => {
+          const input = coreMfaVerificationSchema.safeParse(request.body);
+          if (!input.success)
+            return reply.code(400).send({
+              error: { code: 'INVALID_MFA_CODE', message: 'MFA verification input is invalid.' },
+            });
+          const result = await coreIdentityRepository.confirmMfaEnrollment(
+            request.auth!.sub!,
+            input.data,
+            String(request.headers['x-correlation-id'] ?? randomUUID()),
+          );
+          if (result === 'identity_not_found')
+            return reply.code(404).send({
+              error: { code: 'CORE_IDENTITY_NOT_FOUND', message: 'Core identity was not found.' },
+            });
+          if (result === 'invalid_code')
+            return reply
+              .code(400)
+              .send({ error: { code: 'INVALID_MFA_CODE', message: 'The MFA code is invalid.' } });
+          return { status: 'verified' };
+        },
+      );
+      app.post('/v1/identity/mfa/step-up', { preHandler: authenticate }, async (request, reply) => {
+        const input = coreMfaVerificationSchema.safeParse(request.body);
+        if (!input.success)
+          return reply.code(400).send({
+            error: { code: 'INVALID_MFA_CODE', message: 'MFA verification input is invalid.' },
+          });
+        const result = await coreIdentityRepository.stepUp(
+          request.auth!.sub!,
+          input.data,
+          String(request.headers['x-correlation-id'] ?? randomUUID()),
+        );
+        if (result === 'identity_not_found')
+          return reply.code(404).send({
+            error: { code: 'CORE_IDENTITY_NOT_FOUND', message: 'Core identity was not found.' },
+          });
+        if (result === 'mfa_not_enrolled')
+          return reply.code(409).send({
+            error: {
+              code: 'MFA_NOT_ENROLLED',
+              message: 'Enroll an MFA factor before requesting step-up access.',
+            },
+          });
+        if (result === 'invalid_code')
+          return reply
+            .code(401)
+            .send({ error: { code: 'INVALID_MFA_CODE', message: 'The MFA code is invalid.' } });
+        return { ...result, tokenType: 'Bearer' };
+      });
+    }
     if (retell && authorizer) {
       app.get(
         '/v1/employee-portal/communications/calls',
@@ -2339,6 +2584,35 @@ export function buildApp({
         );
       }
       if (quoteRepository) {
+        const quoteLifecycleError = (error: unknown, reply: FastifyReply) => {
+          if (!(error instanceof QuoteLifecycleError)) throw error;
+          const code =
+            error.code === 'QUOTE_NOT_FOUND' ? 404 : error.code === 'QUOTE_EXPIRED' ? 409 : 409;
+          return reply.code(code).send({
+            error: {
+              code: error.code,
+              message:
+                error.code === 'QUOTE_NOT_FOUND'
+                  ? 'Quote was not found.'
+                  : error.code === 'QUOTE_EXPIRED'
+                    ? 'Quote has expired.'
+                    : 'Quote cannot complete that lifecycle action.',
+            },
+          });
+        };
+        const quoteId = (request: FastifyRequest) =>
+          z.object({ id: z.uuid() }).safeParse(request.params).data?.id;
+        const quoteStepUpGuard = async (request: FastifyRequest, reply: FastifyReply) => {
+          if (
+            !security?.stepUpClaim ||
+            !security.stepUpValue ||
+            hasStepUpAuthentication(request.auth!, security)
+          )
+            return;
+          return reply.code(403).send({
+            error: { code: 'STEP_UP_REQUIRED', message: 'Step-up authentication is required.' },
+          });
+        };
         app.post(
           '/v1/core-admin/quotes',
           {
@@ -2382,6 +2656,166 @@ export function buildApp({
             }
           },
         );
+        if (quoteRepository.transitionForSubject) {
+          for (const [pathAction, permissionKey, requiresStepUp] of [
+            ['issue', 'quote.issue', false],
+            ['approve', 'quote.approve', true],
+            ['cancel', 'quote.cancel', false],
+            ['expire', 'quote.issue', false],
+          ] as const) {
+            const action =
+              pathAction === 'issue'
+                ? 'issued'
+                : pathAction === 'approve'
+                  ? 'approved'
+                  : pathAction === 'cancel'
+                    ? 'cancelled'
+                    : 'expired';
+            app.post(
+              `/v1/core-admin/quotes/:id/${pathAction}`,
+              {
+                preHandler: [
+                  authenticate,
+                  createAuthorizationGuard(authorizer, {
+                    applicationKey: 'core-admin',
+                    permissionKey,
+                  }),
+                  ...(requiresStepUp ? [quoteStepUpGuard] : []),
+                ],
+              },
+              async (request, reply) => {
+                const input = quoteLifecycleSchema.safeParse(request.body);
+                const id = quoteId(request);
+                if (!input.success || !id)
+                  return reply.code(400).send({
+                    error: {
+                      code: 'INVALID_QUOTE_LIFECYCLE',
+                      message: 'Quote lifecycle input is invalid.',
+                    },
+                  });
+                try {
+                  const quote = await quoteRepository.transitionForSubject!(
+                    request.auth!.sub!,
+                    id,
+                    action,
+                    input.data,
+                    typeof request.headers['x-correlation-id'] === 'string'
+                      ? request.headers['x-correlation-id']
+                      : randomUUID(),
+                  );
+                  return (
+                    quote ??
+                    reply.code(404).send({
+                      error: {
+                        code: 'QUOTE_ACTOR_NOT_FOUND',
+                        message: 'Quote actor was not found.',
+                      },
+                    })
+                  );
+                } catch (error) {
+                  return quoteLifecycleError(error, reply);
+                }
+              },
+            );
+          }
+        }
+        if (quoteRepository.acceptForSubject) {
+          app.post(
+            '/v1/customer-portal/quotes/:id/accept',
+            {
+              preHandler: [
+                authenticate,
+                createAuthorizationGuard(authorizer, {
+                  applicationKey: 'customer-portal',
+                  permissionKey: 'quote.self.accept',
+                }),
+              ],
+            },
+            async (request, reply) => {
+              const input = quoteAcceptanceSchema.safeParse(request.body);
+              const id = quoteId(request);
+              if (!input.success || !id)
+                return reply.code(400).send({
+                  error: {
+                    code: 'INVALID_QUOTE_ACCEPTANCE',
+                    message: 'Quote acceptance input is invalid.',
+                  },
+                });
+              try {
+                const quote = await quoteRepository.acceptForSubject!(
+                  request.auth!.sub!,
+                  id,
+                  input.data,
+                  typeof request.headers['x-correlation-id'] === 'string'
+                    ? request.headers['x-correlation-id']
+                    : randomUUID(),
+                );
+                return (
+                  quote ??
+                  reply.code(404).send({
+                    error: {
+                      code: 'QUOTE_ACTOR_NOT_FOUND',
+                      message: 'Quote actor was not found.',
+                    },
+                  })
+                );
+              } catch (error) {
+                return quoteLifecycleError(error, reply);
+              }
+            },
+          );
+        }
+        if (quoteRepository.reviseForSubject) {
+          for (const [path, permissionKey, overrides] of [
+            ['revisions', 'quote.revise', false],
+            ['overrides', 'quote.override', true],
+          ] as const) {
+            app.post(
+              `/v1/core-admin/quotes/:id/${path}`,
+              {
+                preHandler: [
+                  authenticate,
+                  createAuthorizationGuard(authorizer, {
+                    applicationKey: 'core-admin',
+                    permissionKey,
+                  }),
+                  ...(overrides ? [quoteStepUpGuard] : []),
+                ],
+              },
+              async (request, reply) => {
+                const input = quoteRevisionSchema.safeParse(request.body);
+                const id = quoteId(request);
+                if (!input.success || !id)
+                  return reply.code(400).send({
+                    error: {
+                      code: 'INVALID_QUOTE_REVISION',
+                      message: 'Quote revision input is invalid.',
+                    },
+                  });
+                try {
+                  const quote = await quoteRepository.reviseForSubject!(
+                    request.auth!.sub!,
+                    id,
+                    input.data,
+                    String(request.headers['x-correlation-id'] ?? randomUUID()),
+                    overrides,
+                  );
+                  return (
+                    quote ??
+                    reply.code(404).send({
+                      error: {
+                        code: 'QUOTE_ACTOR_NOT_FOUND',
+                        message: 'Quote actor was not found.',
+                      },
+                    })
+                  );
+                } catch (error) {
+                  return quoteLifecycleError(error, reply);
+                }
+              },
+            );
+          }
+        }
       }
       if (jobRepository) {
         if (jobRepository.createRepairRequestForSubject)
