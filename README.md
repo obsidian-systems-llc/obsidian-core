@@ -199,7 +199,7 @@ permission, and `400` with a stable route-specific `INVALID_*` code for invalid 
 | POST | `/v1/employee-portal/customer-work/:type/:id/escalate` | `employee-portal` + `customer.work.escalate` | Escalates work owned by the caller to high or urgent priority. |
 | POST | `/v1/employee-portal/customer-work/:type/:id/complete` | `employee-portal` + `customer.work.complete` | Completes the caller's routing/follow-up work. |
 | POST | `/v1/core-admin/customer-work/:type/:id/route` | `core-admin` + `customer.work.manage`, step-up | Routes customer work company-wide. |
-| GET | `/v1/customer-portal/profile` | `customer-portal` + `customer.profile.read` | Returns the caller's customer profile. |
+| GET | `/v1/customer-portal/profile` | `customer-portal` + `customer.profile.read` | Returns the caller's customer profile and authenticated Core account email. |
 | POST | `/v1/customer-portal/registration` | Authenticated Auth0 user | Creates the caller's encrypted Core customer profile and least-privilege portal access. |
 | PUT | `/v1/customer-portal/profile` | `customer-portal` + `customer.profile.write` | Replaces the caller's encrypted Core profile with an idempotent revision. |
 | DELETE | `/v1/customer-portal/account` | `customer-portal` + `customer.account.close` | Closes and archives the caller's Core customer account after explicit confirmation. |
@@ -400,9 +400,11 @@ button; `403 FORBIDDEN` is authoritative.
 
 #### Customer and employee profile routes
 
-- `GET /v1/customer-portal/profile` returns the caller's `{ id, value, addresses }`, where
-  `value` and each address `value` are the decrypted, application-authorized profile payload and an
-  address has `{ id, label, value }`. Core resolves access through customer membership, not merely
+- `GET /v1/customer-portal/profile` returns the caller's `{ id, email, value, addresses }`. `email`
+  is the authenticated Core account email and is deliberately top-level rather than part of the
+  encrypted editable profile `value`; customer apps should display `response.email`. `value` and each
+  address `value` are the decrypted, application-authorized profile payload and an address has
+  `{ id, label, value }`. Core resolves access through customer membership, not merely
   through an Auth0 login. A caller without a linked active profile receives
   `404 CUSTOMER_PROFILE_NOT_FOUND`.
 - `POST /v1/customer-portal/registration` accepts `{ email, profile, idempotencyKey }` after a

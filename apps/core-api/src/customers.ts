@@ -6,6 +6,8 @@ import { createAuditEvent } from './audit.js';
 
 export type CustomerProfile = {
   addresses: Array<{ id: string; label: string | null; value: Record<string, string> }>;
+  /** The authenticated Core account email. It is not part of the encrypted profile payload. */
+  email: string;
   id: string;
   value: Record<string, string>;
 };
@@ -92,6 +94,7 @@ export type CustomerPortalOverview = CustomerProfile & {
 type EncryptedRow = {
   auth_tag: Buffer;
   ciphertext: Buffer;
+  email: string;
   id: string;
   iv: Buffer;
   key_id: string;
@@ -120,8 +123,9 @@ export class PostgresCustomerRepository implements CustomerRepository {
     try {
       await client.connect();
       const profile = await client.query<EncryptedRow>(
-        `SELECT cp.id, cp.ciphertext, cp.iv, cp.auth_tag, cp.key_id, NULL::text AS label
-         FROM identities i JOIN customer_profile_memberships cpm ON cpm.user_id = i.user_id
+        `SELECT cp.id, cp.ciphertext, cp.iv, cp.auth_tag, cp.key_id, u.email, NULL::text AS label
+         FROM identities i JOIN users u ON u.id = i.user_id
+         JOIN customer_profile_memberships cpm ON cpm.user_id = i.user_id
          JOIN customer_profiles cp ON cp.id = cpm.customer_profile_id
          WHERE i.provider_subject = $1 AND cp.status = 'active'
          ORDER BY cpm.created_at LIMIT 1`,
@@ -137,6 +141,7 @@ export class PostgresCustomerRepository implements CustomerRepository {
       );
       return {
         id: row.id,
+        email: row.email,
         value: this.encryptor.decrypt<Record<string, string>>({
           ...row,
           authTag: row.auth_tag,
@@ -205,7 +210,7 @@ export class PostgresCustomerRepository implements CustomerRepository {
         profileFields: Object.keys(input.profile).sort(),
       });
       await client.query('COMMIT');
-      return { addresses: [], id: profile.rows[0]!.id, value: input.profile };
+      return { addresses: [], email: input.email, id: profile.rows[0]!.id, value: input.profile };
     } catch (error) {
       await client.query('ROLLBACK').catch(() => undefined);
       throw error;

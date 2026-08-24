@@ -80,6 +80,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL customer repository', () => {
   });
   it('returns only the profile and addresses linked to the authenticated identity', async () => {
     await expect(repository.getForSubject(subject)).resolves.toMatchObject({
+      email: `customer-${userId}@example.invalid`,
       id: profileId,
       value: { name: 'Synthetic Customer' },
       addresses: [{ id: addressId, label: 'home', value: { city: 'Exampleville' } }],
@@ -88,6 +89,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL customer repository', () => {
   });
   it('returns an encrypted device only through the owning customer portal overview', async () => {
     await expect(repository.portalOverviewForSubject(subject)).resolves.toMatchObject({
+      email: `customer-${userId}@example.invalid`,
       id: profileId,
       devices: [{ id: deviceId, status: 'active', value: { type: 'phone' } }],
       jobs: [],

@@ -10,7 +10,12 @@ const app = buildApp({
     }),
   },
   customerRepository: {
-    getForSubject: async () => ({ id: 'customer-1', value: { name: 'Customer' }, addresses: [] }),
+    getForSubject: async () => ({
+      email: 'customer@example.com',
+      id: 'customer-1',
+      value: { name: 'Customer' },
+      addresses: [],
+    }),
   },
 });
 afterAll(async () => app.close());
@@ -27,6 +32,6 @@ describe('customer profile boundary', () => {
       headers: { authorization: 'Bearer token' },
     });
     expect(response.statusCode).toBe(200);
-    expect(response.json()).toMatchObject({ id: 'customer-1' });
+    expect(response.json()).toMatchObject({ email: 'customer@example.com', id: 'customer-1' });
   });
 });
