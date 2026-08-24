@@ -126,11 +126,14 @@ import {
 } from './account-invitations.js';
 import {
   coreCustomerRegistrationSchema,
+  coreLegacyLinkSchema,
   coreLoginSchema,
   coreMfaVerificationSchema,
   corePasswordResetConfirmSchema,
   corePasswordResetRequestSchema,
+  coreSessionRevokeSchema,
   coreTokenSchema,
+  coreWorkforceRegistrationSchema,
   type CoreIdentityRepository,
 } from './core-identity.js';
 
@@ -315,6 +318,42 @@ export function buildApp({
         });
       return reply.code(202).send(result);
     });
+    if (accountInvitationRepository) {
+      app.post('/v1/identity/workforce-registration', async (request, reply) => {
+        const parsed = coreWorkforceRegistrationSchema.safeParse(request.body);
+        if (!parsed.success)
+          return reply.code(400).send({
+            error: {
+              code: 'INVALID_WORKFORCE_REGISTRATION',
+              message: 'Workforce registration input is invalid.',
+            },
+          });
+        if (
+          !(await accountInvitationRepository.isRegistrationEligible(
+            parsed.data.invitationToken,
+            parsed.data.email,
+          ))
+        )
+          return reply.code(409).send({
+            error: {
+              code: 'WORKFORCE_INVITATION_UNAVAILABLE',
+              message: 'This invitation is unavailable for the supplied email address.',
+            },
+          });
+        const result = await coreIdentityRepository.registerWorkforce(
+          parsed.data,
+          String(request.headers['x-correlation-id'] ?? randomUUID()),
+        );
+        if (result === 'email_exists')
+          return reply.code(409).send({
+            error: {
+              code: 'IDENTITY_EMAIL_UNAVAILABLE',
+              message: 'An account cannot be created with this email.',
+            },
+          });
+        return reply.code(202).send(result);
+      });
+    }
     app.post('/v1/identity/login', async (request, reply) => {
       const parsed = coreLoginSchema.safeParse(request.body);
       if (!parsed.success)
@@ -534,6 +573,84 @@ export function buildApp({
       subject: request.auth?.sub,
     }));
     if (coreIdentityRepository) {
+      app.post('/v1/identity/link/legacy', { preHandler: authenticate }, async (request, reply) => {
+        const input = coreLegacyLinkSchema.safeParse(request.body);
+        if (!input.success)
+          return reply.code(400).send({
+            error: { code: 'INVALID_LEGACY_LINK', message: 'Legacy-link input is invalid.' },
+          });
+        const result = await coreIdentityRepository.linkLegacyIdentity(
+          request.auth!.sub!,
+          input.data,
+          String(request.headers['x-correlation-id'] ?? randomUUID()),
+        );
+        if (result === 'identity_not_found')
+          return reply.code(404).send({
+            error: { code: 'LEGACY_IDENTITY_NOT_FOUND', message: 'Legacy identity was not found.' },
+          });
+        if (result === 'email_mismatch')
+          return reply.code(403).send({
+            error: {
+              code: 'LEGACY_IDENTITY_EMAIL_MISMATCH',
+              message: 'The supplied email does not match the authenticated account.',
+            },
+          });
+        if (result === 'already_linked')
+          return reply.code(409).send({
+            error: {
+              code: 'LEGACY_IDENTITY_ALREADY_LINKED',
+              message: 'This account already has Core credentials.',
+            },
+          });
+        if (coreIdentitySessionCookie)
+          reply.header(
+            'set-cookie',
+            `${coreIdentitySessionCookie.name}=${result.refreshToken}; Path=/v1/identity; HttpOnly; SameSite=${coreIdentitySessionCookie.secure ? 'None' : 'Lax'}; ${coreIdentitySessionCookie.secure ? 'Secure; ' : ''}Max-Age=${coreIdentitySessionCookie.maxAgeSeconds}`,
+          );
+        return {
+          accessToken: result.accessToken,
+          expiresIn: result.expiresIn,
+          tokenType: 'Bearer',
+        };
+      });
+      app.get('/v1/identity/sessions', { preHandler: authenticate }, async (request, reply) => {
+        const sessions = await coreIdentityRepository.listSessions(request.auth!.sub!);
+        return sessions === 'identity_not_found'
+          ? reply.code(404).send({
+              error: { code: 'CORE_IDENTITY_NOT_FOUND', message: 'Core identity was not found.' },
+            })
+          : sessions;
+      });
+      app.post(
+        '/v1/identity/sessions/:id/revoke',
+        { preHandler: authenticate },
+        async (request, reply) => {
+          const id = (request.params as { id: string }).id;
+          const input = coreSessionRevokeSchema.safeParse(request.body);
+          if (!zUuid(id) || !input.success)
+            return reply.code(400).send({
+              error: {
+                code: 'INVALID_SESSION_REVOCATION',
+                message: 'Session revocation input is invalid.',
+              },
+            });
+          const result = await coreIdentityRepository.revokeSession(
+            request.auth!.sub!,
+            id,
+            input.data.reason,
+            String(request.headers['x-correlation-id'] ?? randomUUID()),
+          );
+          if (result === 'identity_not_found')
+            return reply.code(404).send({
+              error: { code: 'CORE_IDENTITY_NOT_FOUND', message: 'Core identity was not found.' },
+            });
+          if (result === 'session_not_found')
+            return reply.code(404).send({
+              error: { code: 'CORE_SESSION_NOT_FOUND', message: 'Session was not found.' },
+            });
+          return { status: 'revoked' };
+        },
+      );
       app.post(
         '/v1/identity/mfa/enrollment',
         { preHandler: authenticate },

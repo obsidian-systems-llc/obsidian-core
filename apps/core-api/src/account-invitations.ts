@@ -51,6 +51,7 @@ type InvitationRow = AccountInvitation & {
   token_key_id: string;
 };
 export type AccountInvitationRepository = {
+  isRegistrationEligible(token: string, email: string): Promise<boolean>;
   create(
     subject: string,
     input: z.infer<typeof createAccountInvitationSchema>,
@@ -84,6 +85,24 @@ export class PostgresAccountInvitationRepository implements AccountInvitationRep
       configuration,
     ),
   ) {}
+
+  async isRegistrationEligible(token: string, recipientEmail: string): Promise<boolean> {
+    const parsedEmail = email.safeParse(recipientEmail);
+    if (!parsedEmail.success) return false;
+    const client = new Client({ connectionString: this.databaseUrl });
+    try {
+      await client.connect();
+      const result = await client.query<{ id: string }>(
+        `SELECT id FROM account_invitations
+         WHERE token_hash=$1 AND recipient_email=$2 AND status IN ('queued','sending','sent','failed')
+           AND expires_at>now()`,
+        [tokenHash(token), parsedEmail.data],
+      );
+      return Boolean(result.rows[0]);
+    } finally {
+      await client.end();
+    }
+  }
 
   async create(
     subject: string,

@@ -40,6 +40,26 @@ export const coreCustomerRegistrationSchema = z.object({
   profile: profileSchema,
   idempotencyKey,
 });
+export const coreWorkforceRegistrationSchema = z.object({
+  email: z
+    .string()
+    .trim()
+    .email()
+    .max(320)
+    .transform((value) => value.toLowerCase()),
+  password: passwordSchema,
+  invitationToken: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
+  idempotencyKey,
+});
+export const coreLegacyLinkSchema = z.object({
+  email: z
+    .string()
+    .trim()
+    .email()
+    .max(320)
+    .transform((value) => value.toLowerCase()),
+  password: passwordSchema,
+});
 export const coreLoginSchema = z.object({
   email: z
     .string()
@@ -65,6 +85,7 @@ export const corePasswordResetRequestSchema = z.object({
 export const coreMfaVerificationSchema = z.object({
   code: z.string().trim().min(6).max(64),
 });
+export const coreSessionRevokeSchema = z.object({ reason: z.string().trim().min(3).max(500) });
 
 export function createTotpCode(seed: Buffer, at = Date.now()): string {
   const counter = Buffer.alloc(8);
@@ -110,6 +131,15 @@ export type CoreIdentityRepository = {
     input: z.infer<typeof coreCustomerRegistrationSchema>,
     correlationId: string,
   ): Promise<'email_exists' | { profileId: string; verificationRequired: true }>;
+  registerWorkforce(
+    input: z.infer<typeof coreWorkforceRegistrationSchema>,
+    correlationId: string,
+  ): Promise<'email_exists' | { verificationRequired: true }>;
+  linkLegacyIdentity(
+    legacySubject: string,
+    input: z.infer<typeof coreLegacyLinkSchema>,
+    correlationId: string,
+  ): Promise<'identity_not_found' | 'email_mismatch' | 'already_linked' | CoreIdentityTokens>;
   login(
     input: z.infer<typeof coreLoginSchema>,
     correlationId: string,
@@ -119,6 +149,13 @@ export type CoreIdentityRepository = {
     correlationId: string,
   ): Promise<'invalid_session' | CoreIdentityTokens>;
   logout(refreshToken: string, correlationId: string): Promise<void>;
+  listSessions(subject: string): Promise<'identity_not_found' | CoreIdentitySession[]>;
+  revokeSession(
+    subject: string,
+    sessionId: string,
+    reason: string,
+    correlationId: string,
+  ): Promise<'identity_not_found' | 'session_not_found' | true>;
   confirmEmail(token: string, correlationId: string): Promise<'invalid_token' | true>;
   requestPasswordReset(email: string, correlationId: string): Promise<void>;
   confirmPasswordReset(
@@ -146,6 +183,13 @@ export type CoreIdentityRepository = {
     | 'invalid_code'
     | { accessToken: string; expiresIn: number }
   >;
+};
+export type CoreIdentitySession = {
+  id: string;
+  createdAt: Date;
+  expiresAt: Date;
+  lastUsedAt: Date | null;
+  authenticationMethods: string[];
 };
 
 const hashToken = (value: string) => createHash('sha256').update(value, 'utf8').digest();
@@ -281,6 +325,102 @@ export class PostgresCoreIdentityRepository implements CoreIdentityRepository {
     }
   }
 
+  async registerWorkforce(
+    input: z.infer<typeof coreWorkforceRegistrationSchema>,
+    correlationId: string,
+  ) {
+    const client = new Client({ connectionString: this.databaseUrl });
+    try {
+      await client.connect();
+      await client.query('BEGIN');
+      const duplicate = await client.query<{ id: string }>(
+        'SELECT id FROM users WHERE lower(email)=lower($1) FOR UPDATE',
+        [input.email],
+      );
+      if (duplicate.rows[0]) return await rollback(client, 'email_exists' as const);
+      const user = await client.query<{ id: string }>(
+        "INSERT INTO users (email,status) VALUES ($1,'active') RETURNING id",
+        [input.email],
+      );
+      const userId = user.rows[0]!.id;
+      await client.query(
+        "INSERT INTO identities (user_id,provider,provider_subject) VALUES ($1,'core',$2)",
+        [userId, `core|${userId}`],
+      );
+      await this.savePassword(client, userId, input.password);
+      await this.issueOneTimeToken(client, userId, input.email, 'email_verification');
+      await this.audit(
+        client,
+        userId,
+        'identity.workforce_registered',
+        'account_invitation',
+        null,
+        correlationId,
+        {},
+      );
+      await client.query('COMMIT');
+      return { verificationRequired: true as const };
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => undefined);
+      throw error;
+    } finally {
+      await client.end();
+    }
+  }
+
+  async linkLegacyIdentity(
+    legacySubject: string,
+    input: z.infer<typeof coreLegacyLinkSchema>,
+    correlationId: string,
+  ) {
+    if (legacySubject.startsWith('core|')) return 'already_linked' as const;
+    const client = new Client({ connectionString: this.databaseUrl });
+    try {
+      await client.connect();
+      await client.query('BEGIN');
+      const identity = await client.query<{ user_id: string; email: string }>(
+        `SELECT i.user_id,u.email FROM identities i JOIN users u ON u.id=i.user_id
+         WHERE i.provider_subject=$1 AND i.provider<>'core' AND u.status='active' AND u.archived_at IS NULL FOR UPDATE`,
+        [legacySubject],
+      );
+      const current = identity.rows[0];
+      if (!current) return await rollback(client, 'identity_not_found' as const);
+      if (current.email.toLowerCase() !== input.email)
+        return await rollback(client, 'email_mismatch' as const);
+      const existingCore = await client.query<{ user_id: string }>(
+        "SELECT user_id FROM identities WHERE provider='core' AND user_id=$1 FOR UPDATE",
+        [current.user_id],
+      );
+      if (existingCore.rows[0]) return await rollback(client, 'already_linked' as const);
+      await client.query(
+        "INSERT INTO identities (user_id,provider,provider_subject) VALUES ($1,'core',$2)",
+        [current.user_id, `core|${current.user_id}`],
+      );
+      await this.savePassword(client, current.user_id, input.password);
+      await client.query(
+        'UPDATE users SET email_verified_at=COALESCE(email_verified_at,now()),updated_at=now() WHERE id=$1',
+        [current.user_id],
+      );
+      const tokens = await this.createSession(client, current.user_id, ['legacy_link', 'pwd']);
+      await this.audit(
+        client,
+        current.user_id,
+        'identity.legacy_linked',
+        'user',
+        current.user_id,
+        correlationId,
+        {},
+      );
+      await client.query('COMMIT');
+      return tokens;
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => undefined);
+      throw error;
+    } finally {
+      await client.end();
+    }
+  }
+
   async login(input: z.infer<typeof coreLoginSchema>, correlationId: string) {
     const client = new Client({ connectionString: this.databaseUrl });
     try {
@@ -401,6 +541,65 @@ export class PostgresCoreIdentityRepository implements CoreIdentityRepository {
           {},
         );
       await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => undefined);
+      throw error;
+    } finally {
+      await client.end();
+    }
+  }
+
+  async listSessions(subject: string) {
+    const client = new Client({ connectionString: this.databaseUrl });
+    try {
+      await client.connect();
+      const userId = await this.coreUserId(client, subject);
+      if (!userId) return 'identity_not_found' as const;
+      const result = await client.query<{
+        id: string;
+        created_at: Date;
+        expires_at: Date;
+        last_used_at: Date | null;
+        authentication_methods: string[];
+      }>(
+        'SELECT id,created_at,expires_at,last_used_at,authentication_methods FROM sessions WHERE user_id=$1 AND revoked_at IS NULL AND expires_at>now() ORDER BY created_at DESC',
+        [userId],
+      );
+      return result.rows.map((row) => ({
+        id: row.id,
+        createdAt: row.created_at,
+        expiresAt: row.expires_at,
+        lastUsedAt: row.last_used_at,
+        authenticationMethods: row.authentication_methods,
+      }));
+    } finally {
+      await client.end();
+    }
+  }
+
+  async revokeSession(subject: string, sessionId: string, reason: string, correlationId: string) {
+    const client = new Client({ connectionString: this.databaseUrl });
+    try {
+      await client.connect();
+      await client.query('BEGIN');
+      const userId = await this.coreUserId(client, subject, true);
+      if (!userId) return await rollback(client, 'identity_not_found' as const);
+      const result = await client.query<{ id: string }>(
+        "UPDATE sessions SET revoked_at=now(),revoked_reason='user_revoked',updated_at=now() WHERE id=$1 AND user_id=$2 AND revoked_at IS NULL RETURNING id",
+        [sessionId, userId],
+      );
+      if (!result.rows[0]) return await rollback(client, 'session_not_found' as const);
+      await this.audit(
+        client,
+        userId,
+        'identity.session_revoked',
+        'session',
+        sessionId,
+        correlationId,
+        { reason },
+      );
+      await client.query('COMMIT');
+      return true as const;
     } catch (error) {
       await client.query('ROLLBACK').catch(() => undefined);
       throw error;

@@ -6,6 +6,12 @@ const repository = {
     profileId: '11111111-1111-4111-8111-111111111111',
     verificationRequired: true as const,
   })),
+  registerWorkforce: vi.fn(async () => ({ verificationRequired: true as const })),
+  linkLegacyIdentity: vi.fn(async () => ({
+    accessToken: 'linked-access-token',
+    refreshToken: 'linked-refresh-token',
+    expiresIn: 900,
+  })),
   login: vi.fn(async () => ({
     accessToken: 'access-token',
     refreshToken: 'refresh-token',
@@ -17,6 +23,16 @@ const repository = {
     expiresIn: 900,
   })),
   logout: vi.fn(async () => undefined),
+  listSessions: vi.fn(async () => [
+    {
+      id: '11111111-1111-4111-8111-111111111114',
+      createdAt: new Date(),
+      expiresAt: new Date(Date.now() + 60_000),
+      lastUsedAt: null,
+      authenticationMethods: ['pwd'],
+    },
+  ]),
+  revokeSession: vi.fn(async () => true as const),
   confirmEmail: vi.fn(async () => true as const),
   requestPasswordReset: vi.fn(async () => undefined),
   confirmPasswordReset: vi.fn(async () => true as const),
@@ -28,8 +44,17 @@ const repository = {
   confirmMfaEnrollment: vi.fn(async () => true as const),
   stepUp: vi.fn(async () => ({ accessToken: 'step-up-token', expiresIn: 300 })),
 };
+const workforceInvitationRepository = {
+  isRegistrationEligible: vi.fn(async () => true),
+  create: vi.fn(),
+  list: vi.fn(),
+  revoke: vi.fn(),
+  accept: vi.fn(),
+  deliverPending: vi.fn(),
+};
 const app = buildApp({
   coreIdentityRepository: repository,
+  accountInvitationRepository: workforceInvitationRepository,
   coreIdentitySessionCookie: { maxAgeSeconds: 2_592_000, name: 'core_session', secure: true },
   verifyToken: async () => ({ sub: 'core|user' }),
 });
@@ -62,6 +87,24 @@ describe('Core-owned identity API', () => {
       payload: registration,
     });
     expect(JSON.stringify(response.json())).not.toContain('token');
+  });
+  it('requires an active email-specific invitation for workforce registration', async () => {
+    const response = await app.inject({
+      method: 'POST',
+      url: '/v1/identity/workforce-registration',
+      payload: {
+        email: 'employee@example.test',
+        password: registration.password,
+        invitationToken: 'a'.repeat(43),
+        idempotencyKey: '11111111-1111-4111-8111-111111111115',
+      },
+    });
+    expect(response.statusCode).toBe(202);
+    expect(response.json()).toEqual({ verificationRequired: true });
+    expect(workforceInvitationRepository.isRegistrationEligible).toHaveBeenCalledWith(
+      'a'.repeat(43),
+      'employee@example.test',
+    );
   });
   it('returns a short-lived bearer access token and rotating refresh credential after login', async () => {
     const response = await app.inject({
@@ -140,5 +183,21 @@ describe('Core-owned identity API', () => {
       expiresIn: 300,
       tokenType: 'Bearer',
     });
+  });
+  it('lists and revokes only Core-owned sessions', async () => {
+    const sessions = await app.inject({
+      method: 'GET',
+      url: '/v1/identity/sessions',
+      headers: { authorization: 'Bearer synthetic' },
+    });
+    expect(sessions.statusCode).toBe(200);
+    const revoked = await app.inject({
+      method: 'POST',
+      url: '/v1/identity/sessions/11111111-1111-4111-8111-111111111114/revoke',
+      headers: { authorization: 'Bearer synthetic' },
+      payload: { reason: 'Synthetic session test.' },
+    });
+    expect(revoked.statusCode).toBe(200);
+    expect(revoked.json()).toEqual({ status: 'revoked' });
   });
 });

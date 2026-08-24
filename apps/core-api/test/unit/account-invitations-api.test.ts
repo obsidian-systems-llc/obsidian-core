@@ -12,6 +12,7 @@ const invitation = {
   status: 'queued' as const,
 };
 const repository = {
+  isRegistrationEligible: async () => true,
   accept: async () => ({
     applicationKey: 'executive-panel',
     roleKey: 'executive',

@@ -39,10 +39,11 @@ production architecture.
 ## Consequences
 
 Core requires a protected signing secret, verified Resend sender, HTTPS API/portal origins, email
-verification and reset pages, and Node.js 24.7 or later for Argon2id. The migration is not complete
-until session-revocation administration, a user-controlled Auth0-to-Core linking screen, workforce
-registration from an invitation, real-database identity tests, and this operational migration have
-been validated in production.
+verification and reset pages, and Node.js 24.7 or later for Argon2id. Core now provides user session
+revocation, an authenticated Auth0-to-Core linking endpoint, invitation-gated workforce registration,
+and real-PostgreSQL lifecycle coverage. The migration remains reversible until the portal/app clients
+adopt these routes and an operational production smoke test validates email delivery, browser cookies,
+and both legacy and Core access paths.
 
 ## Operational migration and rollback
 

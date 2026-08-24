@@ -82,6 +82,16 @@ always display the same success state; then the emailed URL targets
 `POST /v1/identity/password-reset/confirm` with `{ "token", "password" }`. Both email links expire
 after 30 minutes and are single-use. A completed password reset revokes all active Core sessions.
 
+Users can review their own active Core refresh sessions with `GET /v1/identity/sessions`, which returns
+only opaque session IDs, timestamps, and authentication methods. `POST
+/v1/identity/sessions/:id/revoke` accepts `{ "reason": "..." }`, can revoke only the caller's session,
+and is fully audited. It never exposes refresh credentials or IP/device fingerprints.
+
+During the Auth0 migration window, a person already authenticated with a legacy Auth0 bearer token can
+choose a Core password by calling `POST /v1/identity/link/legacy` with `{ "email", "password" }`.
+Core requires an exact match to the server-side legacy account email, creates a separate Core identity
+reference, and issues a normal Core session. It never reads, imports, or transfers an Auth0 password.
+
 Core-owned MFA is available for Core-issued access tokens. An authenticated user starts enrollment with
 `POST /v1/identity/mfa/enrollment`; Core returns an `otpauth://` URI and ten recovery codes exactly
 once. The client renders the URI as a QR code locally, displays recovery codes for an offline secure
@@ -95,6 +105,16 @@ After Core login, use the existing customer-portal API unchanged: profile, overv
 wallet, repair requests, saved payment methods, enrollment, cancellation, and repairs are still
 authorized by Core's membership, entitlement, and permission checks. A Core subject has the form
 `core|<Core user UUID>`; clients must treat it as opaque and never use it to authorize UI behavior.
+
+### Workforce invitation signup
+
+An invited employee, manager, or executive completes `POST /v1/identity/workforce-registration` with
+`{ email, password, invitationToken, idempotencyKey }`. Core validates that the invitation is live and
+addressed to that email before creating the unverified Core account and queues the verification email.
+After verification and Core login, the administrative app submits the original fragment-held invitation
+token to `POST /v1/account-invitations/accept`; Core then grants the specific invited entitlement and
+role. Registration alone grants no workforce access. The portal must keep the invitation token out of
+URLs, logs, analytics, local storage, and error reporting.
 
 ### API perimeter configuration
 
@@ -140,6 +160,10 @@ permission, and `400` with a stable route-specific `INVALID_*` code for invalid 
 | POST | `/v1/identity/email-verification/confirm` | Public, rate-limited | Consumes a one-time email verification token. |
 | POST | `/v1/identity/password-reset/request` | Public, rate-limited | Queues a reset email without disclosing whether the address exists. |
 | POST | `/v1/identity/password-reset/confirm` | Public, rate-limited | Consumes one reset token, replaces the Argon2id credential, and revokes active sessions. |
+| POST | `/v1/identity/workforce-registration` | Public, rate-limited, valid invitation required | Creates an unverified Core account only for the email named by an active invitation; it grants no role until later acceptance. |
+| POST | `/v1/identity/link/legacy` | Authenticated legacy Auth0 identity, rate-limited | Requires the legacy account email plus a new Core password; creates a Core identity reference without importing an Auth0 password. |
+| GET | `/v1/identity/sessions` | Authenticated Core identity | Lists the caller's active Core sessions without credentials, device, or network metadata. |
+| POST | `/v1/identity/sessions/:id/revoke` | Authenticated Core identity, rate-limited | Revokes only the caller's active Core session and records an audit event. |
 | POST | `/v1/identity/mfa/enrollment` | Authenticated Core identity | Creates/replaces a pending TOTP factor and returns its one-time provisioning URI plus recovery codes. |
 | POST | `/v1/identity/mfa/enrollment/confirm` | Authenticated Core identity | Verifies the current TOTP code and activates the pending factor. |
 | POST | `/v1/identity/mfa/step-up` | Authenticated Core identity, rate-limited | Verifies an active TOTP factor or one unused recovery code and returns a five-minute MFA bearer token. |
@@ -628,10 +652,11 @@ AUTH0_INVITATION_EMAIL_CLAIM=https://obsidian-systems.tech/email
 
 `INVITATION_ACCEPT_URL` must be an HTTPS page controlled by an Obsidian administrative application.
 Core appends the opaque invitation token as a URL fragment (`#invite=...`), so browsers do not send it
-to the Vercel server. The page must read the fragment, require the recipient to sign up or sign in
-through Auth0, obtain an API-audience access token, and send the token only to `POST
-/v1/account-invitations/accept`. Do not log, persist, or place the fragment token in application
-analytics. The access token's configured email claim must exactly match the invited address.
+to the Vercel server. The page must read the fragment and either register the recipient with
+`/v1/identity/workforce-registration`, verify and sign in through Core, then accept the invitation; or,
+during the migration window, sign in through Auth0 and accept it with a legacy token. Do not log,
+persist, or place the fragment token in application analytics. Core derives the Core identity email
+server-side and compares it exactly to the invited address.
 
 An owner uses `GET /v1/core-admin/authorization/roles` to populate the available role selector, then
 uses `POST /v1/core-admin/account-invitations` with `{ email, roleId, expiresAt?, idempotencyKey }`.
