@@ -135,11 +135,18 @@ export class PostgresDeviceCareEntitlementRepository {
       await client.connect();
       await client.query('BEGIN');
       const candidates = await client.query<{ id: string; policy_id: string; balance: string }>(
-        `SELECT cs.id,policy.id AS policy_id,COALESCE(SUM(l.amount_minor),0)::text AS balance
-         FROM customer_subscriptions cs JOIN LATERAL (SELECT id,forfeiture_after_days FROM device_care_membership_policies WHERE effective_from<=now() AND (effective_to IS NULL OR effective_to>now()) ORDER BY version_number DESC LIMIT 1) policy ON true
-         LEFT JOIN device_care_credit_ledger l ON l.customer_subscription_id=cs.id
-         WHERE cs.status='past_due' AND cs.delinquent_at IS NOT NULL AND cs.delinquent_at<=now() - (policy.forfeiture_after_days || ' days')::interval
-         GROUP BY cs.id,policy.id FOR UPDATE`,
+        `SELECT cs.id,policy.id AS policy_id,
+           COALESCE((SELECT SUM(l.amount_minor) FROM device_care_credit_ledger l WHERE l.customer_subscription_id=cs.id),0)::text AS balance
+         FROM customer_subscriptions cs
+         JOIN LATERAL (
+           SELECT id,forfeiture_after_days FROM device_care_membership_policies
+           WHERE effective_from<=now() AND (effective_to IS NULL OR effective_to>now())
+           ORDER BY version_number DESC LIMIT 1
+         ) policy ON true
+         WHERE cs.status='past_due' AND cs.delinquent_at IS NOT NULL
+           AND policy.forfeiture_after_days IS NOT NULL
+           AND cs.delinquent_at<=now() - (policy.forfeiture_after_days || ' days')::interval
+         FOR UPDATE`,
       );
       let forfeited = 0;
       for (const row of candidates.rows) {

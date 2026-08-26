@@ -469,14 +469,15 @@ priorities:
       Authoritative business policy: $15/month Device Care accrues Repair Credits; credits unlock at
       $60, cap at $350, and MAX Status applies at the cap while active. Member discounts, household
       usage, MAX benefits, and replenishment after credits are spent are documented in README and
-      ADR-0021. The exact lapse/forfeiture and reinstatement timeline remains executive-configurable;
-      do not invent or hard-code it. Signed Square and Stripe invoice accrual, replay-safe ledger
+      ADR-0021. The approved policy grants seven days of delinquency grace, appends forfeiture on
+      day eight, and never restores forfeited credits after renewal. Signed Square and Stripe invoice accrual, replay-safe ledger
       entries, and the customer wallet read contract are implemented as a safe foundation. Stripe
       recognizes both its legacy Invoice subscription field and its current parent subscription
       details representation. The entitlement migration adds immutable credit applications linked
       to accepted quote/repair records, verified immediate-household relationships, MAX benefit-use
-      records, and staff read/write routes. Automated lapse, forfeiture, restoration, and executive
-      policy-version commands remain to be completed before this priority can be marked done.
+      records, and staff read/write routes. Automated forfeiture reconciliation is implemented;
+      executive policy-version commands and adjustment/reversal workflows remain before this
+      priority can be marked done.
   - id: CORE-037
     title: Communications architecture and Retell AI call integration
     status: done

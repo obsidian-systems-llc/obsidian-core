@@ -960,9 +960,10 @@ member agreement, repair-credit ledger, benefit entitlements, and audit history.
   and repair parts, plus `15%` off eligible accessories and other eligible inventory excluding parts.
 - Credits may be applied to eligible devices owned by the member's immediate household. Core must
   require explicit, auditable household membership and device ownership before an application.
-- The membership must remain active to retain credits. Any lapse, grace period, forfeiture trigger,
-  reinstatement rule, and restoration behavior must be versioned executive policy; Core must never
-  silently delete a credit balance.
+- A member has a seven-day grace period after delinquency. On the eighth day, Core appends a
+  forfeiture entry for the remaining balance. A later renewal resumes future accrual only; it never
+  restores forfeited credits. This lifecycle is versioned Core policy and never silently deletes a
+  credit balance.
 - At the `$350.00` cap, a member receives MAX Status while the membership remains active. Further
   monthly payments maintain—not exceed—the cap. MAX benefits are priority service when practical,
   free diagnostics, one free cleaning/detailing entitlement every three months, `20%` eligible
@@ -1023,8 +1024,9 @@ credits; Core does not infer a household relationship from a shared phone number
 MAX-only benefits are recorded through the benefit-redemption route. Device cleaning is available
 once per configured policy interval (currently 90 days); the returned entitlement gives the next
 eligible time. Membership-policy data is versioned and contains the active discount, MAX benefit,
-grace, forfeiture, and restoration settings. Until the executive policy explicitly selects a lapse
-or forfeiture timeline, Core does not silently remove historical credits.
+grace, forfeiture, and restoration settings. The approved policy gives seven delinquency grace days
+and appends forfeiture on day eight; renewal after forfeiture starts future accrual without restoring
+prior credits. Core reconciles eligible delinquent subscriptions at service startup and hourly.
 
 ### Compensation and commissions
 
