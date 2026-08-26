@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { Client } from 'pg';
 import { z } from 'zod';
 import { createAuditEvent } from './audit.js';
@@ -123,6 +124,41 @@ export class PostgresDeviceCareEntitlementRepository {
       const profile = await this.profileForSubject(client, subject);
       if (!profile) return null;
       return await this.entitlementForProfile(client, profile);
+    } finally {
+      await client.end();
+    }
+  }
+
+  async reconcileDelinquencies(): Promise<number> {
+    const client = new Client({ connectionString: this.databaseUrl });
+    try {
+      await client.connect();
+      await client.query('BEGIN');
+      const candidates = await client.query<{ id: string; policy_id: string; balance: string }>(
+        `SELECT cs.id,policy.id AS policy_id,COALESCE(SUM(l.amount_minor),0)::text AS balance
+         FROM customer_subscriptions cs JOIN LATERAL (SELECT id,forfeiture_after_days FROM device_care_membership_policies WHERE effective_from<=now() AND (effective_to IS NULL OR effective_to>now()) ORDER BY version_number DESC LIMIT 1) policy ON true
+         LEFT JOIN device_care_credit_ledger l ON l.customer_subscription_id=cs.id
+         WHERE cs.status='past_due' AND cs.delinquent_at IS NOT NULL AND cs.delinquent_at<=now() - (policy.forfeiture_after_days || ' days')::interval
+         GROUP BY cs.id,policy.id FOR UPDATE`,
+      );
+      let forfeited = 0;
+      for (const row of candidates.rows) {
+        if (BigInt(row.balance) <= 0n) continue;
+        await client.query(
+          `INSERT INTO device_care_credit_ledger (customer_subscription_id,membership_policy_id,entry_type,amount_minor,reason) VALUES ($1,$2,'forfeiture',$3,'Membership delinquent beyond configured forfeiture period')`,
+          [row.id, row.policy_id, (-BigInt(row.balance)).toString()],
+        );
+        await this.audit(client, null, 'device_care.credits_forfeited', row.id, randomUUID(), {
+          amountMinor: row.balance,
+          delinquencyDays: 8,
+        });
+        forfeited += 1;
+      }
+      await client.query('COMMIT');
+      return forfeited;
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => undefined);
+      throw error;
     } finally {
       await client.end();
     }
@@ -446,7 +482,7 @@ export class PostgresDeviceCareEntitlementRepository {
     const current = policy.rows[0];
     if (!current) throw new Error('No active Device Care membership policy exists.');
     const subscription = await client.query<{ id: string; active: boolean; balance: string }>(
-      `SELECT cs.id,(cs.status='active') AS active,COALESCE(SUM(l.amount_minor),0)::text AS balance FROM customer_subscriptions cs LEFT JOIN device_care_credit_ledger l ON l.customer_subscription_id=cs.id WHERE cs.customer_profile_id=$1 GROUP BY cs.id ORDER BY cs.updated_at DESC LIMIT 1`,
+      `SELECT cs.id,(cs.status='active' OR (cs.status='past_due' AND cs.delinquent_at>now() - (policy.grace_period_days || ' days')::interval)) AS active,COALESCE(SUM(l.amount_minor),0)::text AS balance FROM customer_subscriptions cs LEFT JOIN device_care_credit_ledger l ON l.customer_subscription_id=cs.id CROSS JOIN LATERAL (SELECT grace_period_days FROM device_care_membership_policies WHERE effective_from<=now() AND (effective_to IS NULL OR effective_to>now()) ORDER BY version_number DESC LIMIT 1) policy WHERE cs.customer_profile_id=$1 GROUP BY cs.id,policy.grace_period_days ORDER BY cs.updated_at DESC LIMIT 1`,
       [profileId],
     );
     const row = subscription.rows[0];
@@ -505,7 +541,7 @@ export class PostgresDeviceCareEntitlementRepository {
   }
   private async audit(
     client: Client,
-    actorUserId: string,
+    actorUserId: string | null,
     action: string,
     targetId: string,
     correlationId: string,

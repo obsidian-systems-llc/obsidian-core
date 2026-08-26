@@ -4,8 +4,8 @@ ALTER TABLE device_care_membership_policies
   ADD COLUMN max_accessory_discount_basis_points integer NOT NULL DEFAULT 2000 CHECK (max_accessory_discount_basis_points BETWEEN 0 AND 10000),
   ADD COLUMN cleaning_interval_days integer NOT NULL DEFAULT 90 CHECK (cleaning_interval_days > 0),
   ADD COLUMN workmanship_warranty_days integer NOT NULL DEFAULT 90 CHECK (workmanship_warranty_days > 0),
-  ADD COLUMN grace_period_days integer NOT NULL DEFAULT 0 CHECK (grace_period_days >= 0),
-  ADD COLUMN forfeiture_after_days integer CHECK (forfeiture_after_days IS NULL OR forfeiture_after_days > grace_period_days),
+  ADD COLUMN grace_period_days integer NOT NULL DEFAULT 7 CHECK (grace_period_days >= 0),
+  ADD COLUMN forfeiture_after_days integer NOT NULL DEFAULT 8 CHECK (forfeiture_after_days > grace_period_days),
   ADD COLUMN restore_forfeited_credits_on_reinstatement boolean NOT NULL DEFAULT false;
 
 ALTER TABLE device_care_credit_ledger
@@ -13,6 +13,11 @@ ALTER TABLE device_care_credit_ledger
   ADD COLUMN quote_id uuid REFERENCES quotes(id),
   ADD COLUMN related_ledger_entry_id uuid REFERENCES device_care_credit_ledger(id),
   ADD COLUMN reason text;
+
+ALTER TABLE customer_subscriptions ADD COLUMN delinquent_at timestamptz;
+UPDATE device_care_membership_policies
+SET grace_period_days=7,forfeiture_after_days=8,restore_forfeited_credits_on_reinstatement=false
+WHERE version_number=1;
 
 CREATE TABLE device_care_household_memberships (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),

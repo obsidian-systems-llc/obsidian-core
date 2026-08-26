@@ -168,6 +168,9 @@ const stripeWebhookRepository =
     ? new PostgresPaymentRepository(environment.DATABASE_URL)
     : undefined;
 const configuredDeviceCareRepository = deviceCareRepository ?? stripeDeviceCareRepository;
+const deviceCareEntitlementRepository = new PostgresDeviceCareEntitlementRepository(
+  environment.DATABASE_URL,
+);
 const app = buildApp({
   databaseUrl: environment.DATABASE_URL,
   authorizer: new PostgresAuthorizer(environment.DATABASE_URL),
@@ -194,9 +197,7 @@ const app = buildApp({
   reportingRepository: new PostgresReportingRepository(environment.DATABASE_URL),
   compensationRepository: new PostgresCompensationRepository(environment.DATABASE_URL),
   deviceCareWalletRepository: new PostgresDeviceCareWalletRepository(environment.DATABASE_URL),
-  deviceCareEntitlementRepository: new PostgresDeviceCareEntitlementRepository(
-    environment.DATABASE_URL,
-  ),
+  deviceCareEntitlementRepository,
   publicDeviceCareOfferRepository: new PostgresPublicDeviceCareOfferRepository(
     environment.DATABASE_URL,
   ),
@@ -287,6 +288,18 @@ async function start(): Promise<void> {
       }, environment.CUSTOMER_EMAIL_DELIVERY_POLL_INTERVAL_MS);
       interval.unref();
     }
+    void deviceCareEntitlementRepository
+      .reconcileDelinquencies()
+      .catch((error: unknown) => app.log.error(error));
+    const entitlementInterval = setInterval(
+      () => {
+        void deviceCareEntitlementRepository
+          .reconcileDelinquencies()
+          .catch((error: unknown) => app.log.error(error));
+      },
+      60 * 60 * 1000,
+    );
+    entitlementInterval.unref();
   } catch (error) {
     app.log.error(error);
     process.exitCode = 1;

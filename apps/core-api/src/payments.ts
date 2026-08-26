@@ -871,7 +871,8 @@ export class PostgresPaymentRepository implements PaymentRepository {
           `UPDATE customer_subscriptions
            SET status=$1, provider_version=COALESCE($2, provider_version),
                renewal_at=COALESCE($3::date, renewal_at), updated_at=now(),
-               cancelled_at=CASE WHEN $1='cancelled' THEN COALESCE(cancelled_at,now()) ELSE cancelled_at END
+               cancelled_at=CASE WHEN $1='cancelled' THEN COALESCE(cancelled_at,now()) ELSE cancelled_at END,
+               delinquent_at=CASE WHEN $1='past_due' THEN COALESCE(delinquent_at,now()) WHEN $1='active' THEN NULL ELSE delinquent_at END
            WHERE provider='square' AND provider_subscription_reference=$4
              AND ($5::text IS NULL OR provider_environment=$5)
            RETURNING id`,
@@ -973,7 +974,7 @@ export class PostgresPaymentRepository implements PaymentRepository {
           ? new Date(object.current_period_end * 1000).toISOString()
           : null;
         const updated = await client.query<{ id: string }>(
-          `UPDATE customer_subscriptions SET status=$1,renewal_at=COALESCE($2::timestamptz,renewal_at),updated_at=now(),cancelled_at=CASE WHEN $1='cancelled' THEN COALESCE(cancelled_at,now()) ELSE cancelled_at END WHERE provider='stripe' AND provider_subscription_reference=$3 AND provider_environment=$4 RETURNING id`,
+          `UPDATE customer_subscriptions SET status=$1,renewal_at=COALESCE($2::timestamptz,renewal_at),updated_at=now(),cancelled_at=CASE WHEN $1='cancelled' THEN COALESCE(cancelled_at,now()) ELSE cancelled_at END,delinquent_at=CASE WHEN $1='past_due' THEN COALESCE(delinquent_at,now()) WHEN $1='active' THEN NULL ELSE delinquent_at END WHERE provider='stripe' AND provider_subscription_reference=$3 AND provider_environment=$4 RETURNING id`,
           [status, renewalAt, object.id, environment],
         );
         if (updated.rows[0])
