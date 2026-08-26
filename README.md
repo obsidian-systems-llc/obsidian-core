@@ -214,6 +214,11 @@ permission, and `400` with a stable route-specific `INVALID_*` code for invalid 
 | POST | `/v1/customer-portal/subscriptions/device-care` | `customer-portal` + `subscription.enroll` | Enrolls the caller in the configured Device Care plan using an owned saved card. |
 | POST | `/v1/customer-portal/subscriptions/device-care/cancel` | `customer-portal` + `subscription.cancel` | Schedules cancellation at the stored agreement provider's billing-period boundary, including configured legacy Square agreements after Stripe becomes the selected processor. |
 | GET | `/v1/customer-portal/device-care/wallet` | `customer-portal` + `customer.portal.read` | Returns Core-calculated Device Care credit, membership, MAX, and discount state. |
+| GET | `/v1/core-admin/device-care/members` | `core-admin` + `device-care.member.read` | Paginates Core-owned Device Care membership and balance summaries. |
+| GET | `/v1/core-admin/device-care/members/:id` | `core-admin` + `device-care.member.read` | Returns the selected active customer's calculated entitlement state. |
+| POST | `/v1/core-admin/device-care/members/:id/household-members` | `core-admin` + `device-care.household.manage` | Verifies an immediate-household customer relationship for controlled credit eligibility. |
+| POST | `/v1/core-admin/device-care/repair-credits/applications` | `core-admin` + `device-care.credit.apply` | Applies an idempotent Repair Credit amount to an accepted quote linked to a repair job. |
+| POST | `/v1/core-admin/device-care/benefit-redemptions` | `core-admin` + `device-care.benefit.redeem` | Records an authorized MAX benefit use, including cleaning-interval enforcement. |
 | GET | `/v1/customer-portal/overview` | `customer-portal` + `customer.portal.read` | Returns the caller's owned portal records, excluding payment data until the portal-payment follow-up. |
 | POST | `/v1/webhooks/retell` | Public, signed Retell webhook | Verifies and replay-protects Retell call lifecycle events. |
 | GET | `/v1/employee-portal/communications/calls` | `employee-portal` + `communication.call.read` | Lists the caller's assigned calls and actionable unassigned calls. |
@@ -1000,6 +1005,26 @@ a successful signed `invoice.paid` event for the Core-owned active agreement cre
 `$15.00` ledger accrual (or only the remaining amount below the `$350.00` cap) and one provider-
 neutral Device Care payment-receipt delivery record. The wallet changes only after that signed event
 is processed; a successful browser enrollment response alone is not a credit award.
+
+### Device Care entitlement operations
+
+CORE owns Device Care balances, discount rates, MAX eligibility, household relationships, and benefit
+use. Customer applications read `GET /v1/customer-portal/device-care/wallet` and display its
+authoritative `balanceMinor`, `availableMinor`, `membershipActive`, `usable`, `maxStatus`,
+`discounts`, `policyVersion`, and `benefits` values; they must never calculate eligibility locally.
+
+Authorized operations staff use the Device Care member routes above. A Repair Credit application
+requires an active membership, an accepted immutable quote already linked to the repair job, and an
+amount no greater than both the remaining quote total and available credit. The operation is
+idempotent, writes a negative immutable ledger entry plus a linked application record, and audits
+the actor. A repair for a verified immediate-household customer can use the membership owner's
+credits; Core does not infer a household relationship from a shared phone number or AI data.
+
+MAX-only benefits are recorded through the benefit-redemption route. Device cleaning is available
+once per configured policy interval (currently 90 days); the returned entitlement gives the next
+eligible time. Membership-policy data is versioned and contains the active discount, MAX benefit,
+grace, forfeiture, and restoration settings. Until the executive policy explicitly selects a lapse
+or forfeiture timeline, Core does not silently remove historical credits.
 
 ### Compensation and commissions
 

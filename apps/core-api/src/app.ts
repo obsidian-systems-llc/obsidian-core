@@ -108,6 +108,14 @@ import {
   type DeviceCareRepository,
 } from './device-care.js';
 import type { DeviceCareWallet } from './device-care-wallet.js';
+import {
+  applyRepairCreditSchema,
+  benefitRedemptionSchema,
+  deviceCarePageSchema,
+  householdMemberSchema,
+  DeviceCareEntitlementError,
+  type PostgresDeviceCareEntitlementRepository,
+} from './device-care-entitlements.js';
 import type { PublicDeviceCareOfferRepository } from './public-device-care-offer.js';
 import {
   CommunicationWorkflowError,
@@ -164,6 +172,7 @@ export type BuildAppOptions = {
   paymentRepository?: PaymentRepository;
   deviceCareRepository?: DeviceCareRepository;
   deviceCareWalletRepository?: { forSubject(subject: string): Promise<DeviceCareWallet | null> };
+  deviceCareEntitlementRepository?: PostgresDeviceCareEntitlementRepository;
   publicDeviceCareOfferRepository?: PublicDeviceCareOfferRepository;
   squareWebhookRepository?: Pick<PaymentRepository, 'processSquareWebhook'>;
   squareWebhooks?: {
@@ -204,6 +213,7 @@ export function buildApp({
   paymentRepository,
   deviceCareRepository,
   deviceCareWalletRepository,
+  deviceCareEntitlementRepository,
   publicDeviceCareOfferRepository,
   squareWebhookRepository,
   squareWebhooks,
@@ -1020,7 +1030,7 @@ export function buildApp({
         },
       );
     }
-    if (deviceCareWalletRepository && authorizer)
+    if ((deviceCareWalletRepository || deviceCareEntitlementRepository) && authorizer)
       app.get(
         '/v1/customer-portal/device-care/wallet',
         {
@@ -1033,11 +1043,114 @@ export function buildApp({
           ],
         },
         async (request, reply) =>
-          (await deviceCareWalletRepository.forSubject(request.auth!.sub!)) ??
+          (await (deviceCareEntitlementRepository ?? deviceCareWalletRepository)!.forSubject(
+            request.auth!.sub!,
+          )) ??
           reply.code(404).send({
             error: { code: 'CUSTOMER_PROFILE_NOT_FOUND', message: 'Customer profile not found.' },
           }),
       );
+    if (deviceCareEntitlementRepository && authorizer) {
+      const deviceCareAdminGuard = (permissionKey: string) => [
+        authenticate,
+        createAuthorizationGuard(authorizer, { applicationKey: 'core-admin', permissionKey }),
+      ];
+      const deviceCareInputError = (reply: FastifyReply, code: string) =>
+        reply.code(400).send({ error: { code, message: 'Device Care input is invalid.' } });
+      const deviceCareFailure = (reply: FastifyReply, error: unknown) => {
+        if (!(error instanceof DeviceCareEntitlementError)) throw error;
+        const status =
+          error.code === 'CUSTOMER_NOT_FOUND'
+            ? 404
+            : error.code === 'REPAIR_CREDIT_INSUFFICIENT' ||
+                error.code === 'BENEFIT_INTERVAL_ACTIVE'
+              ? 409
+              : 422;
+        return reply
+          .code(status)
+          .send({ error: { code: error.code, message: 'Device Care operation is not eligible.' } });
+      };
+      app.get(
+        '/v1/core-admin/device-care/members',
+        { preHandler: deviceCareAdminGuard('device-care.member.read') },
+        async (request, reply) => {
+          const page = deviceCarePageSchema.safeParse(request.query);
+          return page.success
+            ? await deviceCareEntitlementRepository.list(page.data)
+            : deviceCareInputError(reply, 'INVALID_DEVICE_CARE_PAGINATION');
+        },
+      );
+      app.get(
+        '/v1/core-admin/device-care/members/:id',
+        { preHandler: deviceCareAdminGuard('device-care.member.read') },
+        async (request, reply) => {
+          const id = (request.params as { id: string }).id;
+          if (!zUuid(id)) return deviceCareInputError(reply, 'INVALID_DEVICE_CARE_MEMBER_ID');
+          return (
+            (await deviceCareEntitlementRepository.get(id)) ??
+            reply
+              .code(404)
+              .send({ error: { code: 'CUSTOMER_NOT_FOUND', message: 'Customer not found.' } })
+          );
+        },
+      );
+      app.post(
+        '/v1/core-admin/device-care/members/:id/household-members',
+        { preHandler: deviceCareAdminGuard('device-care.household.manage') },
+        async (request, reply) => {
+          const id = (request.params as { id: string }).id;
+          const input = householdMemberSchema.safeParse(request.body);
+          if (!zUuid(id) || !input.success)
+            return deviceCareInputError(reply, 'INVALID_DEVICE_CARE_HOUSEHOLD_MEMBER');
+          try {
+            return await deviceCareEntitlementRepository.addHouseholdMember(
+              request.auth!.sub!,
+              id,
+              input.data,
+              String(request.headers['x-correlation-id'] ?? randomUUID()),
+            );
+          } catch (error) {
+            return deviceCareFailure(reply, error);
+          }
+        },
+      );
+      app.post(
+        '/v1/core-admin/device-care/repair-credits/applications',
+        { preHandler: deviceCareAdminGuard('device-care.credit.apply') },
+        async (request, reply) => {
+          const input = applyRepairCreditSchema.safeParse(request.body);
+          if (!input.success)
+            return deviceCareInputError(reply, 'INVALID_DEVICE_CARE_CREDIT_APPLICATION');
+          try {
+            return await deviceCareEntitlementRepository.applyRepairCredit(
+              request.auth!.sub!,
+              input.data,
+              String(request.headers['x-correlation-id'] ?? randomUUID()),
+            );
+          } catch (error) {
+            return deviceCareFailure(reply, error);
+          }
+        },
+      );
+      app.post(
+        '/v1/core-admin/device-care/benefit-redemptions',
+        { preHandler: deviceCareAdminGuard('device-care.benefit.redeem') },
+        async (request, reply) => {
+          const input = benefitRedemptionSchema.safeParse(request.body);
+          if (!input.success)
+            return deviceCareInputError(reply, 'INVALID_DEVICE_CARE_BENEFIT_REDEMPTION');
+          try {
+            return await deviceCareEntitlementRepository.redeemBenefit(
+              request.auth!.sub!,
+              input.data,
+              String(request.headers['x-correlation-id'] ?? randomUUID()),
+            );
+          } catch (error) {
+            return deviceCareFailure(reply, error);
+          }
+        },
+      );
+    }
     if (customerRepository?.registerForSubject)
       app.post(
         '/v1/customer-portal/registration',

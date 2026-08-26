@@ -473,9 +473,10 @@ priorities:
       do not invent or hard-code it. Signed Square and Stripe invoice accrual, replay-safe ledger
       entries, and the customer wallet read contract are implemented as a safe foundation. Stripe
       recognizes both its legacy Invoice subscription field and its current parent subscription
-      details representation. Credit redemption, household/device eligibility, benefit-use
-      intervals, lapse policy, and administrative entitlement management remain gated on CORE-030's
-      authoritative repair settlement workflow.
+      details representation. The entitlement migration adds immutable credit applications linked
+      to accepted quote/repair records, verified immediate-household relationships, MAX benefit-use
+      records, and staff read/write routes. Automated lapse, forfeiture, restoration, and executive
+      policy-version commands remain to be completed before this priority can be marked done.
   - id: CORE-037
     title: Communications architecture and Retell AI call integration
     status: done
