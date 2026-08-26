@@ -532,7 +532,7 @@ button; `403 FORBIDDEN` is authoritative.
   both the Square subscription and its matching `SQUARE_*_WEBHOOK_NOTIFICATION_URL` to the exact
   equivalent `https://api.obsidian-systems.tech/...` URL before testing again.
 - `POST /v1/webhooks/stripe/test` and `/v1/webhooks/stripe/production` are intentionally public
-  only for Stripe. Core requires the untouched JSON request body and a current `Stripe-Signature`
+  only for Stripe **snapshot** event destinations. Core requires the untouched JSON request body and a current `Stripe-Signature`
   timestamped `v1` HMAC signed with the matching endpoint-specific `whsec_` secret. A valid event
   is inserted once by provider event ID before state changes; a retry returns
   `{ status: "duplicate" }`. Invalid or stale signatures return `403 INVALID_WEBHOOK_SIGNATURE`;
@@ -540,6 +540,12 @@ button; `403 FORBIDDEN` is authoritative.
   least `payment_intent.succeeded`, `payment_intent.payment_failed`,
   `customer.subscription.created`, `customer.subscription.updated`,
   `customer.subscription.deleted`, and `invoice.paid`.
+  For `invoice.paid`, Core supports both the legacy `invoice.subscription` field and Stripe's
+  current `invoice.parent.subscription_details.subscription` field. The latter is used to match
+  the Core-owned Device Care agreement before issuing an idempotent Repair Credit ledger entry and
+  receipt. Do not point Stripe **thin** event destinations at these routes: thin events require a
+  separate retrieval/reconciliation adapter, tracked by CORE-045, and cannot safely grant credits
+  from an event envelope alone.
 - When `PAYMENT_PROCESSOR=stripe`, an application starts a saved-card flow with
   `POST /v1/customer-portal/payment-methods/setup` and `{ idempotencyKey }`. Core creates or
   reuses the customer's Stripe Customer and returns `{ provider: "stripe", clientSecret }`.
@@ -595,7 +601,7 @@ button; `403 FORBIDDEN` is authoritative.
 | `PAYMENT_PROCESSOR` | No | Payment-provider selector: `square`, `stripe`, `worldpay`, or `commerce360`. `commerce360` is normalized to the Access Worldpay adapter configuration. Default: `square`. |
 | `STRIPE_ENVIRONMENT`, `STRIPE_*_SECRET_KEY` | Required when `PAYMENTS_ENABLED=true` and Stripe is selected | Server-only Stripe processor selection and matching test/live secret key. Production is rejected unless `NODE_ENV=production`. |
 | `STRIPE_*_DEVICE_CARE_PRICE_ID` | Required to activate Stripe Device Care | The matching recurring $15 Stripe Price ID; Core owns its subscription lifecycle. |
-| `STRIPE_*_WEBHOOK_NOTIFICATION_URL`, `STRIPE_*_WEBHOOK_SIGNING_SECRET`, `STRIPE_WEBHOOK_TOLERANCE_SECONDS` | Required to accept Stripe webhook events | Exact endpoint URL, endpoint `whsec_` secret, and timestamp replay tolerance (30–3600 seconds; default 300). |
+| `STRIPE_*_WEBHOOK_NOTIFICATION_URL`, `STRIPE_*_WEBHOOK_SIGNING_SECRET`, `STRIPE_WEBHOOK_TOLERANCE_SECONDS` | Required to accept Stripe snapshot webhook events | Exact snapshot-destination endpoint URL, matching endpoint `whsec_` secret, and timestamp replay tolerance (30–3600 seconds; default 300). |
 | `SQUARE_*` | Required when `PAYMENTS_ENABLED=true` and Square is selected; retained temporarily for legacy Square Device Care cancellation after moving to Stripe | Server-only access token, application/location IDs, API version, exact webhook notification URL, signature key, and matching Device Care catalog mapping. Keep the matching `SQUARE_ENVIRONMENT` configured until every Core-owned Square agreement is cancelled or explicitly migrated. |
 | `RETELL_ENABLED`, `RETELL_API_KEY`, `RETELL_WEBHOOK_SECRET` | Retell is opt-in; API key required when enabled | Server-only Retell integration configuration. Retell's current webhook signature uses its designated webhook API key; the optional secret is reserved only for a separate provider-issued value. |
 | `CUSTOMER_EMAIL_ENABLED` | No, default `false` | Explicit server-side opt-in for Resend transactional customer mail. When `true`, `RESEND_API_KEY` and `RESEND_FROM_EMAIL` are required. |
@@ -688,7 +694,9 @@ method, and subscription so changing the selector does not rewrite or misroute p
 For Stripe, set `STRIPE_ENVIRONMENT=test` while developing and use the matching
 `STRIPE_TEST_SECRET_KEY`, Device Care recurring `price_...` ID, webhook URL, and endpoint-specific
 `STRIPE_TEST_WEBHOOK_SIGNING_SECRET`. Use the parallel `STRIPE_PRODUCTION_*` values only after the
-live webhook endpoint passes a signed-event test. Vercel apps may store only the matching
+live **snapshot** webhook endpoint passes a signed-event test. In Stripe, configure the snapshot
+destination (not a thin destination) to the matching Core route; set the signing secret from that
+same snapshot destination in Render. Vercel apps may store only the matching
 publishable `pk_...` key as a public build variable; Core's `sk_...` and `whsec_...` values belong
 exclusively in Render secret storage. A customer-card save starts at Core's SetupIntent route,
 then Stripe.js confirms the returned client secret and Core verifies/records the completed intent.
@@ -986,6 +994,12 @@ credit redemption against a repair, immediate-household verification, benefit-us
 lapse/forfeiture/reinstatement policy, and administrative entitlement workflows require the
 authoritative quote/repair-settlement work in CORE-030. Those flows must not be simulated in a
 customer client.
+
+Stripe's current invoice representation is reconciled through its nested subscription reference, so
+a successful signed `invoice.paid` event for the Core-owned active agreement creates exactly one
+`$15.00` ledger accrual (or only the remaining amount below the `$350.00` cap) and one provider-
+neutral Device Care payment-receipt delivery record. The wallet changes only after that signed event
+is processed; a successful browser enrollment response alone is not a credit award.
 
 ### Compensation and commissions
 

@@ -470,10 +470,12 @@ priorities:
       $60, cap at $350, and MAX Status applies at the cap while active. Member discounts, household
       usage, MAX benefits, and replenishment after credits are spent are documented in README and
       ADR-0021. The exact lapse/forfeiture and reinstatement timeline remains executive-configurable;
-      do not invent or hard-code it. Signed Square invoice accrual, replay-safe ledger entries, and
-      the customer wallet read contract are implemented as a safe foundation. Credit redemption,
-      household/device eligibility, benefit-use intervals, lapse policy, and administrative
-      entitlement management remain gated on CORE-030's authoritative repair settlement workflow.
+      do not invent or hard-code it. Signed Square and Stripe invoice accrual, replay-safe ledger
+      entries, and the customer wallet read contract are implemented as a safe foundation. Stripe
+      recognizes both its legacy Invoice subscription field and its current parent subscription
+      details representation. Credit redemption, household/device eligibility, benefit-use
+      intervals, lapse policy, and administrative entitlement management remain gated on CORE-030's
+      authoritative repair settlement workflow.
   - id: CORE-037
     title: Communications architecture and Retell AI call integration
     status: done
@@ -597,3 +599,16 @@ priorities:
       not a dependency and must not be used for production authentication. CORE-030 was returned
       to proposed status before deployment; its local, unfinished quote-lifecycle work remains
       uncommitted and must be completed or cleanly reverted in its own iteration.
+  - id: CORE-045
+    title: Stripe thin-event reconciliation adapter
+    status: proposed
+    priority: 44
+    dependencies: [CORE-042, CORE-036]
+    acceptance_criteria:
+      - Core verifies a separately configured Stripe thin-event destination and retrieves the authoritative event and related Stripe resource before any durable state change.
+      - Thin event processing remains replay-safe, records retrieval failures for retry, and cannot create a Repair Credit ledger entry from an incomplete event envelope.
+      - README documents the independent signing secret, endpoint contract, reconciliation behavior, and operational migration from snapshot destinations.
+    implementation_notes: >-
+      Current production credit and receipt processing uses Stripe snapshot events. Thin events are
+      intentionally not routed to the snapshot handlers until a current official retrieval contract,
+      separate endpoint signing secret, replay policy, and production validation are implemented.

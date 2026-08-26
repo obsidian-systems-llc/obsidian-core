@@ -118,6 +118,7 @@ export async function queueDeviceCarePaymentReceipt(
     providerEventReference: string;
     providerInvoiceReference: string;
     providerSubscriptionReference: string;
+    provider?: 'square' | 'stripe';
     environment: 'sandbox' | 'test' | 'production';
     paidAt: string;
   },
@@ -139,7 +140,7 @@ export async function queueDeviceCarePaymentReceipt(
        WHERE cpm.customer_profile_id=cs.customer_profile_id AND u.status='active'
        ORDER BY cpm.created_at LIMIT 1
      ) fallback ON true
-     WHERE cs.provider='square' AND cs.provider_subscription_reference=$4
+     WHERE cs.provider=$4 AND cs.provider_subscription_reference=$5
        AND cs.status IN ('active','past_due','grace') AND cs.provider_environment=$2
      ON CONFLICT (event_type,event_key) DO NOTHING`,
     [
@@ -152,6 +153,7 @@ export async function queueDeviceCarePaymentReceipt(
         providerInvoiceReference: input.providerInvoiceReference,
         paidAt: input.paidAt,
       }),
+      input.provider ?? 'square',
       input.providerSubscriptionReference,
     ],
   );

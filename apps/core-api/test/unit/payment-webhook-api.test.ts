@@ -60,7 +60,15 @@ describe('Stripe webhook boundary', () => {
       id: 'evt_1',
       type: 'invoice.paid',
       created: Math.floor(Date.now() / 1000),
-      data: { object: { id: 'in_1', subscription: 'sub_1' } },
+      data: {
+        object: {
+          id: 'in_1',
+          parent: {
+            type: 'subscription_details',
+            subscription_details: { subscription: 'sub_1' },
+          },
+        },
+      },
     });
     const timestamp = String(Math.floor(Date.now() / 1000));
     const signature = createHmac('sha256', stripeSecret)

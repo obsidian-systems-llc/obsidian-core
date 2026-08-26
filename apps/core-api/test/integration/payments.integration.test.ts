@@ -26,6 +26,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL payment repository', () => {
   let paymentId: string;
   let customerProfileId: string;
   let subscriptionId: string;
+  let stripeSubscriptionId: string;
 
   beforeAll(async () => {
     await client.connect();
@@ -40,13 +41,18 @@ describe.skipIf(!databaseUrl)('PostgreSQL payment repository', () => {
   });
   afterAll(async () => {
     await client.query(
-      "DELETE FROM payment_webhook_events WHERE provider_event_reference IN ('event-payment-test',$1)",
-      [`invoice-payment-${userId}`],
+      "DELETE FROM payment_webhook_events WHERE provider_event_reference IN ('event-payment-test',$1,$2)",
+      [`invoice-payment-${userId}`, `stripe-invoice-payment-${userId}`],
     );
     if (subscriptionId)
       await client.query(
         'DELETE FROM device_care_credit_ledger WHERE customer_subscription_id=$1',
         [subscriptionId],
+      );
+    if (stripeSubscriptionId)
+      await client.query(
+        'DELETE FROM device_care_credit_ledger WHERE customer_subscription_id=$1',
+        [stripeSubscriptionId],
       );
     if (customerProfileId)
       await client.query(
@@ -55,6 +61,8 @@ describe.skipIf(!databaseUrl)('PostgreSQL payment repository', () => {
       );
     if (subscriptionId)
       await client.query('DELETE FROM customer_subscriptions WHERE id=$1', [subscriptionId]);
+    if (stripeSubscriptionId)
+      await client.query('DELETE FROM customer_subscriptions WHERE id=$1', [stripeSubscriptionId]);
     if (customerProfileId)
       await client.query('DELETE FROM customer_email_deliveries WHERE customer_profile_id=$1', [
         customerProfileId,
@@ -220,13 +228,54 @@ describe.skipIf(!databaseUrl)('PostgreSQL payment repository', () => {
     ).resolves.toMatchObject({ id: subscriptionId });
     expect(cancelledReference).toBe(`square-subscription-${userId}`);
     expect(cancellationCalls).toBe(1);
+    const stripeSubscription = await client.query<{ id: string }>(
+      `INSERT INTO customer_subscriptions
+       (customer_profile_id,subscription_plan_version_id,status,provider,provider_environment,provider_subscription_reference)
+       SELECT $1,spv.id,'active','stripe','production',$2
+       FROM subscription_plan_versions spv JOIN subscription_plans sp ON sp.id=spv.subscription_plan_id
+       WHERE sp.key='device-care' ORDER BY spv.version_number DESC LIMIT 1 RETURNING id`,
+      [customerProfileId, `stripe-subscription-${userId}`],
+    );
+    stripeSubscriptionId = stripeSubscription.rows[0]!.id;
+    const stripeEvent = {
+      id: `stripe-invoice-payment-${userId}`,
+      type: 'invoice.paid',
+      created: Math.floor(Date.now() / 1000),
+      data: {
+        object: {
+          id: `stripe-invoice-${userId}`,
+          parent: {
+            type: 'subscription_details',
+            subscription_details: { subscription: `stripe-subscription-${userId}` },
+          },
+        },
+      },
+    };
     await expect(
-      client.query<{ event_type: string; environment: string; amount: string }>(
-        "SELECT event_type,environment,template_data->>'amountMinor' AS amount FROM customer_email_deliveries WHERE customer_profile_id=$1",
-        [customerProfileId],
-      ),
-    ).resolves.toMatchObject({
-      rows: [{ event_type: 'device_care_payment_receipt', environment: 'sandbox', amount: '1500' }],
+      repository.processStripeWebhook(stripeEvent, JSON.stringify(stripeEvent), 'production'),
+    ).resolves.toBe('processed');
+    await expect(
+      repository.processStripeWebhook(stripeEvent, JSON.stringify(stripeEvent), 'production'),
+    ).resolves.toBe('duplicate');
+    await expect(walletRepository.forSubject(subject)).resolves.toMatchObject({
+      availableMinor: '0',
+      balanceMinor: '3000',
+      membershipActive: true,
+      usable: false,
     });
+    const receipts = await client.query<{
+      event_type: string;
+      environment: string;
+      amount: string;
+    }>(
+      "SELECT event_type,environment,template_data->>'amountMinor' AS amount FROM customer_email_deliveries WHERE customer_profile_id=$1",
+      [customerProfileId],
+    );
+    expect(receipts.rows).toEqual(
+      expect.arrayContaining([
+        { event_type: 'device_care_payment_receipt', environment: 'sandbox', amount: '1500' },
+        { event_type: 'device_care_payment_receipt', environment: 'production', amount: '1500' },
+      ]),
+    );
   });
 });

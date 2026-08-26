@@ -586,6 +586,16 @@ export const stripeWebhookEventSchema = z.object({
         id: z.string().min(1),
         status: z.string().optional(),
         subscription: z.string().optional(),
+        parent: z
+          .object({
+            type: z.string().optional(),
+            subscription_details: z
+              .object({
+                subscription: z.string().min(1).optional(),
+              })
+              .optional(),
+          })
+          .optional(),
         current_period_end: z.number().int().nonnegative().optional(),
         canceled_at: z.number().int().nonnegative().nullable().optional(),
         metadata: z.record(z.string(), z.string()).optional(),
@@ -593,6 +603,16 @@ export const stripeWebhookEventSchema = z.object({
       .passthrough(),
   }),
 });
+
+type StripeWebhookObject = z.infer<typeof stripeWebhookEventSchema>['data']['object'];
+
+function stripeInvoiceSubscriptionReference(object: StripeWebhookObject): string | undefined {
+  // Stripe's current Invoice API nests this under parent.subscription_details. Keep the
+  // previous field for webhook endpoints pinned to an older Stripe API version.
+  if (object.subscription) return object.subscription;
+  if (object.parent?.type !== 'subscription_details') return undefined;
+  return object.parent.subscription_details?.subscription;
+}
 
 export type PaymentRepository = {
   createForSubject(
@@ -967,18 +987,21 @@ export class PostgresPaymentRepository implements PaymentRepository {
             'customer_subscription',
           );
       }
-      if (event.type === 'invoice.paid' && object.subscription) {
+      const invoiceSubscriptionReference =
+        event.type === 'invoice.paid' ? stripeInvoiceSubscriptionReference(object) : undefined;
+      if (invoiceSubscriptionReference) {
         await this.accrueDeviceCareCredit(client, {
           eventId: event.id,
           invoiceId: object.id,
-          providerSubscriptionReference: object.subscription,
+          providerSubscriptionReference: invoiceSubscriptionReference,
           environment,
           provider: 'stripe',
         });
         await queueDeviceCarePaymentReceipt(client, {
           providerEventReference: event.id,
           providerInvoiceReference: object.id,
-          providerSubscriptionReference: object.subscription,
+          providerSubscriptionReference: invoiceSubscriptionReference,
+          provider: 'stripe',
           environment,
           paidAt: new Date((event.created ?? Math.floor(Date.now() / 1000)) * 1000).toISOString(),
         });
