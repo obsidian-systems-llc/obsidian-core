@@ -218,7 +218,9 @@ permission, and `400` with a stable route-specific `INVALID_*` code for invalid 
 | GET | `/v1/core-admin/device-care/members/:id` | `core-admin` + `device-care.member.read` | Returns the selected active customer's calculated entitlement state. |
 | POST | `/v1/core-admin/device-care/members/:id/household-members` | `core-admin` + `device-care.household.manage` | Verifies an immediate-household customer relationship for controlled credit eligibility. |
 | POST | `/v1/core-admin/device-care/repair-credits/applications` | `core-admin` + `device-care.credit.apply` | Applies an idempotent Repair Credit amount to an accepted quote linked to a repair job. |
+| POST | `/v1/core-admin/device-care/credit-adjustments` | `core-admin` + `device-care.credit.adjust` | Records an idempotent, immutable reversal or restoration with an operational reason; it cannot make a credit balance negative. |
 | POST | `/v1/core-admin/device-care/benefit-redemptions` | `core-admin` + `device-care.benefit.redeem` | Records an authorized MAX benefit use, including cleaning-interval enforcement. |
+| POST | `/v1/executive/device-care/membership-policy-versions` | `executive-panel` + `device-care.policy.manage`, step-up | Creates an effective-dated, immutable Device Care policy version and closes the previous active version. |
 | GET | `/v1/customer-portal/overview` | `customer-portal` + `customer.portal.read` | Returns the caller's owned portal records, excluding payment data until the portal-payment follow-up. |
 | POST | `/v1/webhooks/retell` | Public, signed Retell webhook | Verifies and replay-protects Retell call lifecycle events. |
 | GET | `/v1/employee-portal/communications/calls` | `employee-portal` + `communication.call.read` | Lists the caller's assigned calls and actionable unassigned calls. |
@@ -1027,6 +1029,16 @@ eligible time. Membership-policy data is versioned and contains the active disco
 grace, forfeiture, and restoration settings. The approved policy gives seven delinquency grace days
 and appends forfeiture on day eight; renewal after forfeiture starts future accrual without restoring
 prior credits. Core reconciles eligible delinquent subscriptions at service startup and hourly.
+
+Staff may correct an operational credit error only with `POST
+/v1/core-admin/device-care/credit-adjustments`. It requires `customerProfileId`, signed
+`amountMinor`, `entryType` (`reversal` or `restoration`), a reason, and an idempotency key. Core
+rejects a correction that would make the historical balance negative, writes an immutable ledger
+entry and adjustment record, and audits the actor. Executive users may create a future or immediate
+membership policy through `POST /v1/executive/device-care/membership-policy-versions`; it requires
+step-up authentication, is serialized to avoid competing policy versions, and cannot retroactively
+rewrite eligibility. A policy command carries all credit, discount, MAX-benefit, grace, forfeiture,
+and restoration terms plus `effectiveFrom` and `idempotencyKey`.
 
 ### Compensation and commissions
 

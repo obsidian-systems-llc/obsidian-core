@@ -456,7 +456,7 @@ priorities:
       been implemented yet.
   - id: CORE-036
     title: Obsidian Device Care credit ledger and benefit entitlements
-    status: in_progress
+    status: done
     priority: 35
     dependencies: [CORE-013, CORE-030, CORE-032]
     acceptance_criteria:
@@ -475,9 +475,9 @@ priorities:
       recognizes both its legacy Invoice subscription field and its current parent subscription
       details representation. The entitlement migration adds immutable credit applications linked
       to accepted quote/repair records, verified immediate-household relationships, MAX benefit-use
-      records, and staff read/write routes. Automated forfeiture reconciliation is implemented;
-      executive policy-version commands and adjustment/reversal workflows remain before this
-      priority can be marked done.
+      records, staff read/write routes, replay-safe credit-adjustment commands, and step-up
+      executive policy-version commands are implemented. Production lifecycle testing remains part
+      of routine payment/webhook monitoring, but the Core-owned contract is complete.
   - id: CORE-037
     title: Communications architecture and Retell AI call integration
     status: done

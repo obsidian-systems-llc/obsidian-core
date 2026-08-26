@@ -111,8 +111,10 @@ import type { DeviceCareWallet } from './device-care-wallet.js';
 import {
   applyRepairCreditSchema,
   benefitRedemptionSchema,
+  creditAdjustmentSchema,
   deviceCarePageSchema,
   householdMemberSchema,
+  membershipPolicySchema,
   DeviceCareEntitlementError,
   type PostgresDeviceCareEntitlementRepository,
 } from './device-care-entitlements.js';
@@ -1063,6 +1065,8 @@ export function buildApp({
           error.code === 'CUSTOMER_NOT_FOUND'
             ? 404
             : error.code === 'REPAIR_CREDIT_INSUFFICIENT' ||
+                error.code === 'CREDIT_ADJUSTMENT_INSUFFICIENT' ||
+                error.code === 'POLICY_SCHEDULE_CONFLICT' ||
                 error.code === 'BENEFIT_INTERVAL_ACTIVE'
               ? 409
               : 422;
@@ -1141,6 +1145,60 @@ export function buildApp({
             return deviceCareInputError(reply, 'INVALID_DEVICE_CARE_BENEFIT_REDEMPTION');
           try {
             return await deviceCareEntitlementRepository.redeemBenefit(
+              request.auth!.sub!,
+              input.data,
+              String(request.headers['x-correlation-id'] ?? randomUUID()),
+            );
+          } catch (error) {
+            return deviceCareFailure(reply, error);
+          }
+        },
+      );
+      app.post(
+        '/v1/core-admin/device-care/credit-adjustments',
+        { preHandler: deviceCareAdminGuard('device-care.credit.adjust') },
+        async (request, reply) => {
+          const input = creditAdjustmentSchema.safeParse(request.body);
+          if (!input.success)
+            return deviceCareInputError(reply, 'INVALID_DEVICE_CARE_CREDIT_ADJUSTMENT');
+          try {
+            return await deviceCareEntitlementRepository.adjustCredit(
+              request.auth!.sub!,
+              input.data,
+              String(request.headers['x-correlation-id'] ?? randomUUID()),
+            );
+          } catch (error) {
+            return deviceCareFailure(reply, error);
+          }
+        },
+      );
+      const deviceCarePolicyGuards = [
+        authenticate,
+        async (request: FastifyRequest, reply: FastifyReply) => {
+          if (
+            !security?.stepUpClaim ||
+            !security.stepUpValue ||
+            hasStepUpAuthentication(request.auth!, security)
+          )
+            return;
+          return reply.code(403).send({
+            error: { code: 'STEP_UP_REQUIRED', message: 'Step-up authentication is required.' },
+          });
+        },
+        createAuthorizationGuard(authorizer, {
+          applicationKey: 'executive-panel',
+          permissionKey: 'device-care.policy.manage',
+        }),
+      ];
+      app.post(
+        '/v1/executive/device-care/membership-policy-versions',
+        { preHandler: deviceCarePolicyGuards },
+        async (request, reply) => {
+          const input = membershipPolicySchema.safeParse(request.body);
+          if (!input.success)
+            return deviceCareInputError(reply, 'INVALID_DEVICE_CARE_MEMBERSHIP_POLICY');
+          try {
+            return await deviceCareEntitlementRepository.createMembershipPolicy(
               request.auth!.sub!,
               input.data,
               String(request.headers['x-correlation-id'] ?? randomUUID()),

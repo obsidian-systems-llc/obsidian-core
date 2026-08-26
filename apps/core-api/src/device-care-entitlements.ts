@@ -36,8 +36,9 @@ export const applyRepairCreditSchema = z.object({
 });
 export const creditAdjustmentSchema = z.object({
   customerProfileId: z.uuid(),
-  entryType: z.enum(['reversal', 'forfeiture', 'restoration']),
+  entryType: z.enum(['reversal', 'restoration']),
   amountMinor: z.coerce.bigint().refine((value) => value !== 0n),
+  relatedLedgerEntryId: z.uuid().nullable().optional(),
   reason: z.string().trim().min(3).max(500),
   idempotencyKey: z.uuid(),
 });
@@ -61,6 +62,7 @@ export const membershipPolicySchema = z
     forfeitureAfterDays: z.coerce.number().int().min(1).max(36500).nullable().optional(),
     restoreForfeitedCreditsOnReinstatement: z.boolean().default(false),
     effectiveFrom: z.coerce.date(),
+    idempotencyKey: z.uuid(),
   })
   .superRefine((value, context) => {
     if (value.capMinor < value.unlockMinor)
@@ -107,8 +109,11 @@ export class DeviceCareEntitlementError extends Error {
       | 'HOUSEHOLD_MEMBER_INVALID'
       | 'REPAIR_CREDIT_INELIGIBLE'
       | 'REPAIR_CREDIT_INSUFFICIENT'
+      | 'CREDIT_ADJUSTMENT_INSUFFICIENT'
       | 'BENEFIT_INELIGIBLE'
-      | 'BENEFIT_INTERVAL_ACTIVE',
+      | 'BENEFIT_INTERVAL_ACTIVE'
+      | 'POLICY_EFFECTIVE_DATE_INVALID'
+      | 'POLICY_SCHEDULE_CONFLICT',
   ) {
     super(code);
   }
@@ -390,6 +395,154 @@ export class PostgresDeviceCareEntitlementRepository {
       );
       await client.query('COMMIT');
       return { id: application.rows[0]!.id, amountMinor: input.amountMinor.toString() };
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => undefined);
+      throw error;
+    } finally {
+      await client.end();
+    }
+  }
+
+  async adjustCredit(
+    subject: string,
+    input: z.infer<typeof creditAdjustmentSchema>,
+    correlationId: string,
+  ) {
+    const client = new Client({ connectionString: this.databaseUrl });
+    try {
+      await client.connect();
+      await client.query('BEGIN');
+      const actorId = await this.userId(client, subject);
+      if (!actorId) return null;
+      const duplicate = await client.query<{ id: string; amount_minor: string }>(
+        `SELECT id,amount_minor FROM device_care_credit_adjustments WHERE adjusted_by_user_id=$1 AND idempotency_key=$2`,
+        [actorId, input.idempotencyKey],
+      );
+      if (duplicate.rows[0]) {
+        await client.query('COMMIT');
+        return { id: duplicate.rows[0].id, amountMinor: duplicate.rows[0].amount_minor };
+      }
+      const subscription = await client.query<{
+        id: string;
+        policy_id: string;
+        balance: string;
+      }>(
+        `SELECT cs.id,policy.id AS policy_id,
+           COALESCE((SELECT SUM(l.amount_minor) FROM device_care_credit_ledger l WHERE l.customer_subscription_id=cs.id),0)::text AS balance
+         FROM customer_subscriptions cs
+         JOIN LATERAL (
+           SELECT id FROM device_care_membership_policies
+           WHERE effective_from<=now() AND (effective_to IS NULL OR effective_to>now())
+           ORDER BY version_number DESC LIMIT 1
+         ) policy ON true
+         WHERE cs.customer_profile_id=$1
+         ORDER BY cs.updated_at DESC LIMIT 1 FOR UPDATE`,
+        [input.customerProfileId],
+      );
+      const member = subscription.rows[0];
+      if (!member) throw new DeviceCareEntitlementError('CUSTOMER_NOT_FOUND');
+      if (BigInt(member.balance) + input.amountMinor < 0n)
+        throw new DeviceCareEntitlementError('CREDIT_ADJUSTMENT_INSUFFICIENT');
+      const ledger = await client.query<{ id: string }>(
+        `INSERT INTO device_care_credit_ledger
+          (customer_subscription_id,membership_policy_id,entry_type,amount_minor,related_ledger_entry_id,reason)
+         VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`,
+        [
+          member.id,
+          member.policy_id,
+          input.entryType,
+          input.amountMinor.toString(),
+          input.relatedLedgerEntryId ?? null,
+          input.reason,
+        ],
+      );
+      const adjustment = await client.query<{ id: string }>(
+        `INSERT INTO device_care_credit_adjustments
+          (customer_subscription_id,ledger_entry_id,entry_type,amount_minor,related_ledger_entry_id,reason,adjusted_by_user_id,idempotency_key,correlation_id)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`,
+        [
+          member.id,
+          ledger.rows[0]!.id,
+          input.entryType,
+          input.amountMinor.toString(),
+          input.relatedLedgerEntryId ?? null,
+          input.reason,
+          actorId,
+          input.idempotencyKey,
+          correlationId,
+        ],
+      );
+      await this.audit(client, actorId, 'device_care.credit_adjusted', adjustment.rows[0]!.id, correlationId, {
+        amountMinor: input.amountMinor.toString(),
+        customerProfileId: input.customerProfileId,
+        entryType: input.entryType,
+        relatedLedgerEntryId: input.relatedLedgerEntryId ?? null,
+      });
+      await client.query('COMMIT');
+      return { id: adjustment.rows[0]!.id, amountMinor: input.amountMinor.toString() };
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => undefined);
+      throw error;
+    } finally {
+      await client.end();
+    }
+  }
+
+  async createMembershipPolicy(
+    subject: string,
+    input: z.infer<typeof membershipPolicySchema>,
+    correlationId: string,
+  ) {
+    const client = new Client({ connectionString: this.databaseUrl });
+    try {
+      await client.connect();
+      await client.query('BEGIN');
+      const actorId = await this.userId(client, subject);
+      if (!actorId) return null;
+      // Permit an immediate policy submitted a few milliseconds before Core receives it,
+      // while preventing an executive from retroactively changing historical eligibility.
+      if (input.effectiveFrom.getTime() < Date.now() - 60_000)
+        throw new DeviceCareEntitlementError('POLICY_EFFECTIVE_DATE_INVALID');
+      const duplicate = await client.query<{ id: string; version_number: number }>(
+        `SELECT id,version_number FROM device_care_membership_policies WHERE created_by_user_id=$1 AND idempotency_key=$2`,
+        [actorId, input.idempotencyKey],
+      );
+      if (duplicate.rows[0]) {
+        await client.query('COMMIT');
+        return { id: duplicate.rows[0].id, version: duplicate.rows[0].version_number };
+      }
+      await client.query('LOCK TABLE device_care_membership_policies IN EXCLUSIVE MODE');
+      const scheduled = await client.query<{ id: string }>(
+        `SELECT id FROM device_care_membership_policies WHERE effective_from>now() LIMIT 1`,
+      );
+      if (scheduled.rows[0]) throw new DeviceCareEntitlementError('POLICY_SCHEDULE_CONFLICT');
+      const version = await client.query<{ version: number }>(
+        `SELECT COALESCE(MAX(version_number),0)::int+1 AS version FROM device_care_membership_policies`,
+      );
+      await client.query(
+        `UPDATE device_care_membership_policies SET effective_to=$1
+         WHERE effective_from<=now() AND (effective_to IS NULL OR effective_to>$1)`,
+        [input.effectiveFrom],
+      );
+      const created = await client.query<{ id: string; version_number: number }>(
+        `INSERT INTO device_care_membership_policies
+          (version_number,accrual_minor,unlock_minor,cap_minor,repair_discount_basis_points,accessory_discount_basis_points,max_accessory_discount_basis_points,cleaning_interval_days,workmanship_warranty_days,grace_period_days,forfeiture_after_days,restore_forfeited_credits_on_reinstatement,effective_from,created_by_user_id,idempotency_key)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING id,version_number`,
+        [
+          version.rows[0]!.version,
+          input.accrualMinor.toString(), input.unlockMinor.toString(), input.capMinor.toString(),
+          input.repairDiscountBasisPoints, input.accessoryDiscountBasisPoints,
+          input.maxAccessoryDiscountBasisPoints, input.cleaningIntervalDays,
+          input.workmanshipWarrantyDays, input.gracePeriodDays, input.forfeitureAfterDays ?? null,
+          input.restoreForfeitedCreditsOnReinstatement, input.effectiveFrom, actorId, input.idempotencyKey,
+        ],
+      );
+      await this.audit(client, actorId, 'device_care.membership_policy_created', created.rows[0]!.id, correlationId, {
+        version: created.rows[0]!.version_number,
+        effectiveFrom: input.effectiveFrom.toISOString(),
+      });
+      await client.query('COMMIT');
+      return { id: created.rows[0]!.id, version: created.rows[0]!.version_number };
     } catch (error) {
       await client.query('ROLLBACK').catch(() => undefined);
       throw error;

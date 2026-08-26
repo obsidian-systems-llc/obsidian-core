@@ -19,7 +19,9 @@ const repository = {
   get: async () => entitlement,
   addHouseholdMember: async () => ({ id: randomUUID(), status: 'active' as const }),
   applyRepairCredit: async () => ({ id: randomUUID(), amountMinor: '1500' }),
+  adjustCredit: async () => ({ id: randomUUID(), amountMinor: '-1500' }),
   redeemBenefit: async () => ({ id: randomUUID(), status: 'redeemed' as const }),
+  createMembershipPolicy: async () => ({ id: randomUUID(), version: 2 }),
 };
 const app = buildApp({
   authorizer: { authorize: async (_subject, requirement) => ({ ...requirement, allowed: true }) },
@@ -63,5 +65,45 @@ describe('Device Care administrative API', () => {
       payload: { customerProfileId, benefitType: 'free_diagnostic', idempotencyKey: randomUUID() },
     });
     expect(benefit.statusCode).toBe(200);
+  });
+  it('validates staff credit adjustments', async () => {
+    const invalid = await app.inject({
+      method: 'POST',
+      url: '/v1/core-admin/device-care/credit-adjustments',
+      headers: { authorization: 'Bearer token' },
+      payload: { customerProfileId, amountMinor: 1500 },
+    });
+    expect(invalid.statusCode).toBe(400);
+    const adjustment = await app.inject({
+      method: 'POST',
+      url: '/v1/core-admin/device-care/credit-adjustments',
+      headers: { authorization: 'Bearer token' },
+      payload: {
+        customerProfileId,
+        entryType: 'reversal',
+        amountMinor: -1500,
+        reason: 'Corrected duplicate credit.',
+        idempotencyKey: randomUUID(),
+      },
+    });
+    expect(adjustment.statusCode).toBe(200);
+  });
+  it('accepts a complete versioned membership-policy command', async () => {
+    const policy = await app.inject({
+      method: 'POST',
+      url: '/v1/executive/device-care/membership-policy-versions',
+      headers: { authorization: 'Bearer token' },
+      payload: {
+        accrualMinor: 1500,
+        unlockMinor: 6000,
+        capMinor: 35000,
+        gracePeriodDays: 7,
+        forfeitureAfterDays: 8,
+        effectiveFrom: new Date().toISOString(),
+        idempotencyKey: randomUUID(),
+      },
+    });
+    expect(policy.statusCode).toBe(200);
+    expect(policy.json()).toMatchObject({ version: 2 });
   });
 });
