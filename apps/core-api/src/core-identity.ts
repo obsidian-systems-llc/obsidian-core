@@ -28,8 +28,10 @@ const passwordSchema = z
   .refine((value) => Buffer.byteLength(value, 'utf8') <= 1024, 'Password is too long.');
 const profileSchema = z.record(z.string(), z.string().trim().min(1).max(500));
 const idempotencyKey = z.uuid();
+const smsPhoneSchema = z.string().trim().regex(/^\+[1-9]\d{7,14}$/);
 
-export const coreCustomerRegistrationSchema = z.object({
+export const coreCustomerRegistrationSchema = z
+  .object({
   email: z
     .string()
     .trim()
@@ -38,8 +40,18 @@ export const coreCustomerRegistrationSchema = z.object({
     .transform((value) => value.toLowerCase()),
   password: passwordSchema,
   profile: profileSchema,
+  smsConsent: z.boolean().default(false),
+  smsPhoneNumber: smsPhoneSchema.optional(),
   idempotencyKey,
-});
+  })
+  .superRefine((value, context) => {
+    if (value.smsConsent && !value.smsPhoneNumber)
+      context.addIssue({
+        code: 'custom',
+        path: ['smsPhoneNumber'],
+        message: 'An E.164 mobile number is required for SMS consent.',
+      });
+  });
 export const coreWorkforceRegistrationSchema = z.object({
   email: z
     .string()
@@ -304,6 +316,22 @@ export class PostgresCoreIdentityRepository implements CoreIdentityRepository {
         'INSERT INTO customer_profile_memberships (customer_profile_id,user_id) VALUES ($1,$2)',
         [profile.rows[0]!.id, userId],
       );
+      if (input.smsConsent) {
+        const phone = this.encryptor.encrypt({ phoneNumber: input.smsPhoneNumber! });
+        await client.query(
+          `INSERT INTO customer_sms_consents
+            (customer_profile_id,user_id,status,source,consent_text_version,ciphertext,iv,auth_tag,key_id)
+           VALUES ($1,$2,'opted_in','customer_registration','v1',$3,$4,$5,$6)`,
+          [
+            profile.rows[0]!.id,
+            userId,
+            phone.ciphertext,
+            phone.iv,
+            phone.authTag,
+            phone.keyId,
+          ],
+        );
+      }
       await this.ensurePortalAccess(client, userId);
       await this.issueOneTimeToken(client, userId, input.email, 'email_verification');
       await this.audit(
@@ -313,7 +341,7 @@ export class PostgresCoreIdentityRepository implements CoreIdentityRepository {
         'customer',
         profile.rows[0]!.id,
         correlationId,
-        { profileFields: Object.keys(input.profile).sort() },
+        { profileFields: Object.keys(input.profile).sort(), smsConsent: input.smsConsent },
       );
       await client.query('COMMIT');
       return { profileId: profile.rows[0]!.id, verificationRequired: true as const };

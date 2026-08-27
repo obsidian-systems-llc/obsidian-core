@@ -88,6 +88,24 @@ describe('Core-owned identity API', () => {
     });
     expect(JSON.stringify(response.json())).not.toContain('token');
   });
+  it('requires an E.164 number when a customer opts in to SMS', async () => {
+    const invalid = await app.inject({
+      method: 'POST',
+      url: '/v1/identity/customer-registration',
+      payload: { ...registration, smsConsent: true },
+    });
+    expect(invalid.statusCode).toBe(400);
+    const valid = await app.inject({
+      method: 'POST',
+      url: '/v1/identity/customer-registration',
+      payload: { ...registration, smsConsent: true, smsPhoneNumber: '+18125550100' },
+    });
+    expect(valid.statusCode).toBe(202);
+    expect(repository.registerCustomer).toHaveBeenLastCalledWith(
+      expect.objectContaining({ smsConsent: true, smsPhoneNumber: '+18125550100' }),
+      expect.any(String),
+    );
+  });
   it('requires an active email-specific invitation for workforce registration', async () => {
     const response = await app.inject({
       method: 'POST',

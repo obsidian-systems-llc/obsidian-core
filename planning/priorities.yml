@@ -614,3 +614,19 @@ priorities:
       Current production credit and receipt processing uses Stripe snapshot events. Thin events are
       intentionally not routed to the snapshot handlers until a current official retrieval contract,
       separate endpoint signing secret, replay policy, and production validation are implemented.
+  - id: CORE-046
+    title: Twilio customer SMS consent and transactional notifications
+    status: proposed
+    priority: 45
+    dependencies: [CORE-018, CORE-032, CORE-044]
+    acceptance_criteria:
+      - Customer signup and account preferences collect separate optional, versioned SMS consent with an E.164 destination; Core encrypts phone data, audits consent changes, and sends no message without active consent.
+      - A backend-only Twilio Messaging Service adapter uses a durable, idempotent SMS outbox for account, Device Care enrollment/renewal, and repair-request acknowledgement notifications; no credentials or messaging decisions are exposed to a portal.
+      - Signed Twilio inbound/status webhooks reconcile STOP/START/HELP and delivery outcomes into Core-owned consent and delivery records; STOP immediately suppresses future SMS.
+      - README documents portal checkbox wording requirements, environment variables, endpoints, outbox behavior, failure/retry policy, Twilio campaign registration, and production validation.
+    implementation_notes: >-
+      Initial Core Identity signup support stores explicit encrypted opt-in evidence when smsConsent is
+      true and smsPhoneNumber is a valid E.164 number. The portal checkbox must be optional and
+      separate from account creation. Build the Twilio adapter only after a Messaging Service and
+      compliant campaign are configured; use the official Twilio Messages API, status callback,
+      inbound webhook signature validation, and Advanced Opt-Out/Consent Management configuration.

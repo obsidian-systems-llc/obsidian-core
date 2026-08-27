@@ -51,9 +51,19 @@ POST /v1/identity/customer-registration
   "email": "customer@example.com",
   "password": "a customer-chosen password of at least 12 characters",
   "profile": { "firstName": "Jane", "lastName": "Doe", "phone": "8125550100" },
+  "smsConsent": true,
+  "smsPhoneNumber": "+18125550100",
   "idempotencyKey": "a UUID"
 }
 ```
+
+`smsConsent` is optional and defaults to `false`. When it is `true`, `smsPhoneNumber` is required
+in E.164 form. The portal must render this as an unchecked, optional checkbox separate from required
+account creation and provide the consent disclosure, Terms, and Privacy Policy links required for the
+Twilio messaging campaign. Core stores the consent time, source, text version, and encrypted phone
+number; it records no consent when the box is unchecked. SMS delivery is not enabled merely by
+collecting consent—Twilio credentials, sender configuration, inbound STOP handling, and the durable
+SMS outbox are the next communications integration.
 
 The `profile` values are encrypted at rest in Core. A successful request returns `202` with
 `{ "profileId": "UUID", "verificationRequired": true }`. It does not log in the customer and never
@@ -153,7 +163,7 @@ permission, and `400` with a stable route-specific `INVALID_*` code for invalid 
 | GET | `/health` | Public | API liveness. |
 | GET | `/ready` | Public | Database readiness. |
 | GET | `/v1/public/device-care/offer` | Public, read-only | Returns active versioned Device Care enrollment price/cadence plus Repair Credit accrual, unlock, and cap terms. |
-| POST | `/v1/identity/customer-registration` | Public, rate-limited | Creates an encrypted customer profile plus an unverified Core Identity account; queues email verification and never returns a verification secret. |
+| POST | `/v1/identity/customer-registration` | Public, rate-limited | Creates an encrypted customer profile plus an unverified Core Identity account; accepts separate optional SMS consent evidence and queues email verification without returning a verification secret. |
 | POST | `/v1/identity/login` | Public, rate-limited | Verifies Core email/password credentials, sets a rotating HTTP-only session cookie, and returns a 15-minute bearer access token. |
 | POST | `/v1/identity/session/refresh` | Session cookie or native refresh credential, rate-limited | Rotates the server-tracked session credential and returns a fresh bearer access token. |
 | POST | `/v1/identity/logout` | Session cookie or native refresh credential, rate-limited | Revokes the current Core session and clears the browser cookie. |
